@@ -3,7 +3,8 @@
 import argparse
 import json
 import os
-import statisticsimport time
+import statistics
+import time
 from pathlib import Path
 
 from app import config
@@ -58,7 +59,7 @@ def run_evaluation(cases: list[dict], agent=None, provider="demo") -> dict:
     }
     checks = {
         "task_success_rate": metrics["task_success_rate"] >= config.MIN_TASK_SUCCESS_RATE,
-        "policy_pass_rate": metrics["policy_pass_rate"] >= config.MIN_POLICY_PASS_RATE,,
+        "policy_pass_rate": metrics["policy_pass_rate"] >= config.MIN_POLICY_PASS_RATE,
         "tool_correctness": metrics["tool_correctness"] >= config.MIN_TOOL_CORRECTNESS,
         "mean_latency_ms": metrics["mean_latency_ms"] <= config.MAX_MEAN_LATENCY_MS,
     }
@@ -91,10 +92,12 @@ def main() -> int:
             "estimated_cost_usd_delta": round(after["estimated_cost_usd"] - before["estimated_cost_usd"], 8),
         }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2) + "\n")
+    args.output.write_text(json.dumps(report, indent=2) + "
+")
     if args.save_baseline:
         args.save_baseline.parent.mkdir(parents=True, exist_ok=True)
-        args.save_baseline.write_text(json.dumps(report, indent=2) + "\n")
+        args.save_baseline.write_text(json.dumps(report, indent=2) + "
+")
     print(json.dumps({"passed": report["passed"], "metrics": report["metrics"], "checks": report["checks"]}, indent=2))
     return 0 if report["passed"] else 1
 
