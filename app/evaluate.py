@@ -92,12 +92,10 @@ def main() -> int:
             "estimated_cost_usd_delta": round(after["estimated_cost_usd"] - before["estimated_cost_usd"], 8),
         }
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(report, indent=2) + "
-")
+    args.output.write_text(json.dumps(report, indent=2) + "\n")
     if args.save_baseline:
         args.save_baseline.parent.mkdir(parents=True, exist_ok=True)
-        args.save_baseline.write_text(json.dumps(report, indent=2) + "
-")
+        args.save_baseline.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps({"passed": report["passed"], "metrics": report["metrics"], "checks": report["checks"]}, indent=2))
     return 0 if report["passed"] else 1
 
