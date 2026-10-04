@@ -15,7 +15,7 @@ The demo defines JSONL test cases, runs a reproducible support workflow with a s
 ## APIs and external services
 
 - **Default path:** no external model API is called. The sample agent is local and deterministic.
-- **Optional live path:** with `AGENTEVAL_PROVIDER=openai`, the runner uses the official Python SDK and OpenAI-compatible Chat Completions function calling. The model can select a simulated read-only order lookup, an order-ID clarification, or a recommended human handoff. Only local fixture logic runs; no real order system is called and no human is contacted. Tool-using cases generally require two model requests (selection and final response). Authentication uses `OPENAI_API_KEY`; endpoint/model are configurable with `OPENAI_BASE_URL` and `OPENAI_MODEL`.
+- **Optional live path:** with `AGENTEVAL_PROVIDER=openai`, the runner uses the official Python SDK and OpenAI-compatible Chat Completions function calling. The model can select a simulated read-only order lookup, an order-ID clarification, or a recommended human handoff. Only local fixture logic runs; no real order system is called and no human is contacted. Each case uses one model request to select a route. The app runs the simulated function locally and formats the final answer in code. Authentication uses `OPENAI_API_KEY`; endpoint/model are configurable with `OPENAI_BASE_URL` and `OPENAI_MODEL`.
 - **CI service:** GitHub Actions runs hosted workflow jobs; checkout/setup-python/upload-artifact are GitHub-maintained actions. This is not an AI API call.
 
 ## Product metrics and release gate

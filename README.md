@@ -42,7 +42,7 @@ export OPENAI_MODEL='your-model'
 python -m app.evaluate --benchmark benchmarks/support.jsonl --output reports/latest.json
 ```
 
-The adapter sends each case's system policy and user input to `POST /chat/completions` via the SDK. If the model chooses a function, the application runs only the allow-listed function against local synthetic data, then sends that result back for the final answer. Cases can therefore make one or two model requests. Put the key in a local environment variable; do not commit it. Provider/model pricing is deliberately not guessed: configure `AGENTEVAL_INPUT_USD_PER_1K` and `AGENTEVAL_OUTPUT_USD_PER_1K` for cost estimates. These are estimates from usage tokens and the configured rates, not provider billing records.
+The adapter sends each case's system policy and user input to the chat completions endpoint. If the model selects a function, the app runs the allow-listed function against local synthetic data and formats the final answer in code. The current flow uses one model request per case. Put the API key in a local environment variable; do not commit it. Configure AGENTEVAL_INPUT_USD_PER_1K and AGENTEVAL_OUTPUT_USD_PER_1K for cost estimates. These are estimates from token usage and configured rates, not provider billing records.
 
 Compare a candidate run with an existing report:
 
