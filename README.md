@@ -32,7 +32,7 @@ The evaluator exits with code `1` when a release threshold fails. That is what c
 
 ## Optional real model API
 
-By default, the project calls **no external API**. To exercise a real OpenAI-compatible chat completions endpoint, install the optional SDK and set `AGENTEVAL_PROVIDER=openai`, `OPENAI_API_KEY`, and optionally `OPENAI_BASE_URL` and `OPENAI_MODEL`. The adapter tests model-generated text against the scenario but does not call company tools or mutate any data.
+By default, the project calls **no external API**. To exercise a real OpenAI-compatible chat completions endpoint, install the optional SDK and set `AGENTEVAL_PROVIDER=openai`, `OPENAI_API_KEY`, and optionally `OPENAI_BASE_URL` and `OPENAI_MODEL`. The live adapter uses function calling to select among three local simulated routes: read-only order lookup, ask for an order ID, or recommend human handoff. The order fixture is synthetic; handoff does not contact anyone. No company systems are called or modified.
 
 ```bash
 pip install -e '.[openai]'
@@ -42,7 +42,7 @@ export OPENAI_MODEL='your-model'
 python -m app.evaluate --benchmark benchmarks/support.jsonl --output reports/latest.json
 ```
 
-The adapter sends each case's system policy and user input to `POST /chat/completions` via the SDK. Put the key in a local environment variable; do not commit it. Provider/model pricing is deliberately not guessed: configure `AGENTEVAL_INPUT_USD_PER_1K` and `AGENTEVAL_OUTPUT_USD_PER_1K` for cost estimates. These are estimates from usage tokens and the configured rates, not provider billing records.
+The adapter sends each case's system policy and user input to `POST /chat/completions` via the SDK. If the model chooses a function, the application runs only the allow-listed function against local synthetic data, then sends that result back for the final answer. Cases can therefore make one or two model requests. Put the key in a local environment variable; do not commit it. Provider/model pricing is deliberately not guessed: configure `AGENTEVAL_INPUT_USD_PER_1K` and `AGENTEVAL_OUTPUT_USD_PER_1K` for cost estimates. These are estimates from usage tokens and the configured rates, not provider billing records.
 
 Compare a candidate run with an existing report:
 

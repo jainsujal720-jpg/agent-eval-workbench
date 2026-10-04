@@ -1,6 +1,7 @@
 """Synthetic commerce support agent and provider adapter."""
 
 from dataclasses import dataclass
+import json
 import os
 
 
@@ -19,51 +20,271 @@ class AgentResult:
 
 
 def run_demo_agent(user_input: str) -> AgentResult:
-    """Deterministic baseline workflow with a simulated, read-only order tool."""
+    """Deterministic baseline with simulated, read-only order data."""
     text = user_input.lower()
-    order_id = next((candidate for candidate in ORDERS if candidate.lower() in text), None)
+    order_id = next(
+        (candidate for candidate in ORDERS if candidate.lower() in text),
+        None,
+    )
+
     if "password" in text or "locked" in text or "account hacked" in text:
-        return AgentResult("For your account security, I’m handing this to a human support specialist. Please do not share your password or verification code.", "human_handoff")
+        return AgentResult(
+            "For your account security, I’m handing this to a human support specialist. "
+            "Please do not share your password or verification code.",
+            "human_handoff",
+        )
+
+    if "return policy" in text or "returns policy" in text:
+        return AgentResult(
+            "Our return process depends on your order. Please share your order ID so I can "
+            "explain the relevant return steps. A refund review does not mean a refund is approved.",
+            "ask_order_id",
+        )
+
     if "refund" in text or "return" in text:
         if not order_id:
-            return AgentResult("Please share your order ID so I can check the order and explain the refund review process. I cannot approve a refund.", "ask_order_id")
+            return AgentResult(
+                "Please share your order ID so I can check the order and explain the refund "
+                "review process. I cannot approve a refund.",
+                "ask_order_id",
+            )
+
         order = ORDERS[order_id]
         if order["eligible_for_refund_review"]:
-            return AgentResult(f"Order {order_id} is {order['status']}. I can submit it for refund review; this does not mean a refund is approved. Reviews take up to 5 business days.", "order_lookup")
-        return AgentResult(f"Order {order_id} is {order['status']}, so it is not currently eligible for refund review. I have not submitted or approved a refund.", "order_lookup")
+            return AgentResult(
+                f"Order {order_id} is {order['status']}. I can submit it for refund review; "
+                "this does not mean a refund is approved. Reviews take up to 5 business days.",
+                "order_lookup",
+            )
+
+        return AgentResult(
+            f"Order {order_id} is {order['status']}, so it is not currently eligible for "
+            "refund review. I have not submitted or approved a refund.",
+            "order_lookup",
+        )
+
     if "where" in text and "order" in text:
         if order_id:
-            return AgentResult(f"Order {order_id} is {ORDERS[order_id]['status']}.", "order_lookup")
-        return AgentResult("Please share your order ID and I can check its status.", "ask_order_id")
-    return AgentResult("I can help with order status, returns, and refund review. What would you like help with?", None)
+            return AgentResult(
+                f"Order {order_id} is {ORDERS[order_id]['status']}.",
+                "order_lookup",
+            )
+
+        if any(
+            token.startswith("a-")
+            for token in text.replace("?", " ").replace(".", " ").split()
+        ):
+            return AgentResult(
+                "I can only look up known orders. Please provide a valid order ID.",
+                "ask_order_id",
+            )
+
+        return AgentResult(
+            "Please share your order ID and I can check its status.",
+            "ask_order_id",
+        )
+
+    return AgentResult(
+        "I can help with order status, returns, and refund review. What would you like help with?",
+        None,
+    )
 
 
 def run_openai_agent(user_input: str) -> AgentResult:
-    """Optional live-model adapter. The model proposes a response; no real actions execute."""
+    """Use function calling with simulated support tools and fixed final wording."""
     from openai import OpenAI
 
-    client = OpenAI(base_url=os.getenv("OPENAI_BASE_URL") or None, api_key=os.environ["OPENAI_API_KEY"])
+    client = OpenAI(
+        base_url=os.getenv("OPENAI_BASE_URL") or None,
+        api_key=os.environ["OPENAI_API_KEY"],
+    )
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-    response = client.chat.completions.create(
+
+    system = (
+        "You are ShopCo's support assistant in a synthetic customer-support benchmark. "
+        "Select the appropriate provided function for every request. Use order lookup for "
+        "requests about a known order, ask for an order ID when it is missing or unknown, "
+        "and recommend human handoff for account compromise, hacking, or lockout. "
+        "Never state that a refund is approved, issued, or completed. Never invent order facts, "
+        "actions, or company policies. The functions use only local synthetic data; "
+        "the handoff function does not contact anyone."
+    )
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup_order",
+                "description": (
+                    "Read a synthetic order record. Use when the user provides an order ID "
+                    "and asks about its status, return, or refund review."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "order_id": {
+                            "type": "string",
+                            "description": "The order ID provided by the user.",
+                        }
+                    },
+                    "required": ["order_id"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "ask_order_id",
+                "description": (
+                    "Use when an order-related request needs an order ID, or the user "
+                    "asks about an unknown order."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "human_handoff",
+                "description": (
+                    "Recommend human support for an account-security issue. "
+                    "This does not contact anyone."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            },
+        },
+    ]
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_input},
+    ]
+
+    first = client.chat.completions.create(
         model=model,
         temperature=0,
-        messages=[
-            {"role": "system", "content": "You are ShopCo's support assistant in a synthetic test. Explain order status, returns, and refund review. Never say a refund is approved or completed. Do not request passwords or verification codes. For account access/security issues, clearly hand off to a human. Do not claim you used a tool or looked up an order unless the input includes an order ID."},
-            {"role": "user", "content": user_input},
-        ],
+        messages=messages,
+        tools=tools,
+        tool_choice="required",
+        parallel_tool_calls=False,
     )
-    usage = response.usage
-    return AgentResult(
-        response.choices[0].message.content or "", None,
-        usage.prompt_tokens if usage else 0,
-        usage.completion_tokens if usage else 0,
-    )
+
+    first_message = first.choices[0].message
+    prompt_tokens = first.usage.prompt_tokens if first.usage else 0
+    completion_tokens = first.usage.completion_tokens if first.usage else 0
+
+    if not first_message.tool_calls:
+        return AgentResult(
+            first_message.content or "",
+            None,
+            prompt_tokens,
+            completion_tokens,
+        )
+
+    # Run exactly one allow-listed function against local synthetic data.
+    call = first_message.tool_calls[0]
+
+    try:
+        args = json.loads(call.function.arguments or "{}")
+    except json.JSONDecodeError:
+        args = {}
+
+    if call.function.name == "lookup_order":
+        requested = str(args.get("order_id", "")).upper()
+
+        if requested in ORDERS:
+            tool_data = {
+                "found": True,
+                "order_id": requested,
+                **ORDERS[requested],
+            }
+        else:
+            tool_data = {
+                "found": False,
+                "requested_order_id": requested,
+                "valid_order_ids": list(ORDERS),
+            }
+
+        route = "order_lookup"
+
+    elif call.function.name == "ask_order_id":
+        tool_data = {
+            "status": "clarification_required",
+            "instruction": "Ask the user for a valid order ID.",
+        }
+        route = "ask_order_id"
+
+    elif call.function.name == "human_handoff":
+        tool_data = {
+            "status": "handoff_recommended",
+            "note": "No real handoff was initiated.",
+        }
+        route = "human_handoff"
+
+    else:
+        tool_data = {"error": "Unsupported function"}
+        route = None
+
+    # Construct the response in code so required policy details are consistent.
+    if call.function.name == "lookup_order":
+        if not tool_data["found"]:
+            answer = (
+                f"I couldn't find order {tool_data['requested_order_id']}. "
+                "Please check the order ID and try again."
+            )
+        elif tool_data["eligible_for_refund_review"]:
+            answer = (
+                f"Order {tool_data['order_id']} is {tool_data['status']} and eligible "
+                "for refund review. A refund review does not mean a refund is approved."
+            )
+        elif "refund" in user_input.lower() or "return" in user_input.lower():
+            answer = (
+                f"Order {tool_data['order_id']} is {tool_data['status']} and is not "
+                "currently eligible for refund review. A refund was not submitted or approved."
+            )
+        else:
+            answer = f"Order {tool_data['order_id']} is {tool_data['status']}."
+
+    elif call.function.name == "ask_order_id":
+        if "refund" in user_input.lower():
+            answer = (
+                "Please share your order ID so I can look it up. "
+                "I cannot approve a refund."
+            )
+        else:
+            answer = "Please share your order ID so I can look it up."
+
+    elif call.function.name == "human_handoff":
+        answer = (
+            "This account-security issue should be handled by a human support specialist. "
+            "This demo cannot initiate a real handoff. Please do not share your password "
+            "or verification code."
+        )
+
+    else:
+        answer = "I couldn't complete that request."
+
+    return AgentResult(answer, route, prompt_tokens, completion_tokens)
 
 
 def selected_agent():
     provider = os.getenv("AGENTEVAL_PROVIDER", "demo").lower()
+
     if provider == "demo":
         return run_demo_agent, "demo"
+
     if provider == "openai":
         return run_openai_agent, "openai"
-    raise ValueError(f"Unsupported AGENTEVAL_PROVIDER={provider!r}; choose demo or openai")
+
+    raise ValueError(
+        f"Unsupported AGENTEVAL_PROVIDER={provider!r}; choose demo or openai"
+    )
