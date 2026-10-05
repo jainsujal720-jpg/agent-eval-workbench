@@ -17,16 +17,25 @@ def load_cases(path: Path) -> list[dict]:
 
 def evaluate_case(case: dict, agent) -> dict:
     started = time.perf_counter()
-    result = agent(case["input"])
+    error = None
+    try:
+        result = agent(case["input"])
+    except Exception as exc:
+        # Record the type only: provider error messages can contain request data.
+        from app.agent import AgentResult
+        error = type(exc).__name__
+        result = AgentResult("", None)
     latency_ms = round((time.perf_counter() - started) * 1000, 2)
     answer = result.answer.lower()
     missing = [phrase for phrase in case.get("expected_contains", []) if phrase.lower() not in answer]
     prohibited = [phrase for phrase in case.get("must_not_contain", []) if phrase.lower() in answer]
     expected_tool = case.get("expected_tool")
+    tool_correct = "expected_tool" not in case or result.tool == expected_tool
     return {
-        "id": case["id"], "success": not missing and not prohibited,
+        "id": case["id"], "success": not missing and not prohibited and tool_correct and error is None,
+        "critical": case.get("critical", False), "error": error,
         "missing_expected": missing, "policy_violations": prohibited,
-        "tool_correct": expected_tool is None or result.tool == expected_tool,
+        "tool_correct": tool_correct,
         "expected_tool": expected_tool, "actual_tool": result.tool,
         "category": case.get("category", "uncategorized"),
         "answer": result.answer, "latency_ms": latency_ms,
@@ -39,6 +48,7 @@ def run_evaluation(cases: list[dict], agent=None, provider="demo") -> dict:
         agent, provider = selected_agent()
     rows = [evaluate_case(case, agent) for case in cases]
     n = max(len(rows), 1)
+    critical_failures = [r["id"] for r in rows if r["critical"] and not r["success"]]
     mean_latency = round(statistics.mean(r["latency_ms"] for r in rows), 2) if rows else 0
     input_rate = float(os.getenv("AGENTEVAL_INPUT_USD_PER_1K", "0"))
     output_rate = float(os.getenv("AGENTEVAL_OUTPUT_USD_PER_1K", "0"))
@@ -51,6 +61,8 @@ def run_evaluation(cases: list[dict], agent=None, provider="demo") -> dict:
     }
     metrics = {
         "case_count": len(rows),
+        "error_count": sum(r["error"] is not None for r in rows),
+        "critical_failure_count": len(critical_failures),
         "task_success_rate": round(sum(r["success"] for r in rows) / n, 4),
         "policy_pass_rate": round(1 - sum(bool(r["policy_violations"]) for r in rows) / n, 4),
         "tool_correctness": round(sum(r["tool_correct"] for r in rows) / n, 4),
@@ -58,6 +70,9 @@ def run_evaluation(cases: list[dict], agent=None, provider="demo") -> dict:
         "estimated_cost_usd": round(estimated_cost, 8), "success_by_category": by_category,
     }
     checks = {
+        "nonempty_benchmark": bool(rows),
+        "no_agent_errors": metrics["error_count"] == 0,
+        "critical_cases": not critical_failures,
         "task_success_rate": metrics["task_success_rate"] >= config.MIN_TASK_SUCCESS_RATE,
         "policy_pass_rate": metrics["policy_pass_rate"] >= config.MIN_POLICY_PASS_RATE,
         "tool_correctness": metrics["tool_correctness"] >= config.MIN_TOOL_CORRECTNESS,
@@ -68,7 +83,7 @@ def run_evaluation(cases: list[dict], agent=None, provider="demo") -> dict:
         "min_policy_pass_rate": config.MIN_POLICY_PASS_RATE,
         "min_tool_correctness": config.MIN_TOOL_CORRECTNESS,
         "max_mean_latency_ms": config.MAX_MEAN_LATENCY_MS,
-    }, "checks": checks, "cases": rows}
+    }, "checks": checks, "critical_failures": critical_failures, "cases": rows}
 
 
 def main() -> int:

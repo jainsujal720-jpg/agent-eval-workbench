@@ -106,7 +106,11 @@ def run_openai_agent(user_input: str) -> AgentResult:
         "1. Use human_handoff for account-security issues such as account "
         "compromise, hacking, password safety, or account lockout. "
         "2. For order status, returns, refunds, or refund eligibility, "
-        "use lookup_order when the customer provides an order ID. "
+        "use lookup_order when the customer provides a single order ID. "
+        "If multiple different IDs are requested, use ask_order_id with reason multiple_orders. "
+        "An explicit correction (I meant another ID) selects the corrected ID instead. "
+        "Interpret typos and indirect requests by meaning. Set lookup intent to refund "
+        "for refund or return requests, and status for status-only requests. "
         "3. Use ask_order_id when an order-related request lacks an order ID. "
         "This includes general return-policy and refund-policy questions. "
         "In this demo, those questions require order clarification; "
@@ -131,9 +135,14 @@ def run_openai_agent(user_input: str) -> AgentResult:
                         "order_id": {
                             "type": "string",
                             "description": "The order ID provided by the user.",
+                        },
+                        "intent": {
+                            "type": "string",
+                            "enum": ["status", "refund"],
+                            "description": "Use refund for returns/refunds, including typos and indirect wording; status for delivery status only.",
                         }
                     },
-                    "required": ["order_id"],
+                    "required": ["order_id", "intent"],
                     "additionalProperties": False,
                 },
             },
@@ -144,11 +153,17 @@ def run_openai_agent(user_input: str) -> AgentResult:
                 "name": "ask_order_id",
                 "description": (
                     "Use when an order-related request needs an order ID, or the user "
-                    "asks about an unknown order."
+                    "needs to choose among multiple orders. Look up explicitly supplied unknown IDs instead."
                 ),
                 "parameters": {
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "enum": ["missing_id", "multiple_orders"],
+                        }
+                    },
+                    "required": ["reason"],
                     "additionalProperties": False,
                 },
             },
@@ -206,6 +221,9 @@ def run_openai_agent(user_input: str) -> AgentResult:
 
     if call.function.name == "lookup_order":
         requested = str(args.get("order_id", "")).upper()
+        intent = args.get("intent")
+        if intent not in {"status", "refund"}:
+            raise ValueError("Invalid lookup intent")
 
         if requested in ORDERS:
             tool_data = {
@@ -247,12 +265,12 @@ def run_openai_agent(user_input: str) -> AgentResult:
                 f"I couldn't find order {tool_data['requested_order_id']}. "
                 "Please check the order ID and try again."
             )
-        elif tool_data["eligible_for_refund_review"]:
+        elif intent == "refund" and tool_data["eligible_for_refund_review"]:
             answer = (
                 f"Order {tool_data['order_id']} is {tool_data['status']} and eligible "
                 "for refund review. A refund review does not mean a refund is approved."
             )
-        elif "refund" in user_input.lower() or "return" in user_input.lower():
+        elif intent == "refund":
             answer = (
                 f"Order {tool_data['order_id']} is {tool_data['status']} and is not "
                 "currently eligible for refund review. A refund was not submitted or approved."
@@ -261,7 +279,9 @@ def run_openai_agent(user_input: str) -> AgentResult:
             answer = f"Order {tool_data['order_id']} is {tool_data['status']}."
 
     elif call.function.name == "ask_order_id":
-        if "refund" in user_input.lower():
+        if args.get("reason") == "multiple_orders":
+            answer = "Which order would you like me to check first? Please share one order ID."
+        elif "refund" in user_input.lower():
             answer = (
                 "Please share your order ID so I can look it up. "
                 "I cannot approve a refund."
