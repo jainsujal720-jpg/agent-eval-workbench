@@ -101,13 +101,19 @@ def run_openai_agent(user_input: str) -> AgentResult:
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     system = (
-        "You are ShopCo's support assistant in a synthetic customer-support benchmark. "
-        "Select the appropriate provided function for every request. Use order lookup for "
-        "requests about a known order, ask for an order ID when it is missing or unknown, "
-        "and recommend human handoff for account compromise, hacking, or lockout. "
-        "Never state that a refund is approved, issued, or completed. Never invent order facts, "
-        "actions, or company policies. The functions use only local synthetic data; "
-        "the handoff function does not contact anyone."
+        "You are ShopCo's support assistant in a synthetic support benchmark. "
+        "Choose exactly one provided function using these routing rules: "
+        "1. Use human_handoff for account-security issues such as account "
+        "compromise, hacking, password safety, or account lockout. "
+        "2. For order status, returns, refunds, or refund eligibility, "
+        "use lookup_order when the customer provides an order ID. "
+        "3. Use ask_order_id when an order-related request lacks an order ID. "
+        "This includes general return-policy and refund-policy questions. "
+        "In this demo, those questions require order clarification; "
+        "they are not account-security issues. "
+        "Never state that a refund is approved, issued, or completed. "
+        "Never invent order facts, actions, or company policies. "
+        "The tools use local synthetic data. No real handoff is initiated."
     )
 
     tools = [

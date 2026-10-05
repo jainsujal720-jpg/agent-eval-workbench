@@ -22,7 +22,7 @@ class EvaluationTests(unittest.TestCase):
     def test_synthetic_company_scenario_passes(self):
         cases = load_cases(Path("benchmarks/support.jsonl"))
         report = run_evaluation(cases)
-        self.assertEqual(report["metrics"]["case_count"], 6)
+        self.assertEqual(report["metrics"]["case_count"], 15)
         self.assertTrue(report["passed"])
         self.assertIn("refund_policy", report["metrics"]["success_by_category"])
 
