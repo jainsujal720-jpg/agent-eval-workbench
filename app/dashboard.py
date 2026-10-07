@@ -1,249 +1,131 @@
-"""Local browser dashboard for the latest AgentEval report."""
-
+"""Local dashboard for single-request and conversation reports."""
+import argparse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import html
 import json
 from pathlib import Path
+from urllib.parse import urlsplit, parse_qs
+
+REPORT = Path('reports/latest.json')
+SESSION_REPORT = Path('reports/session-latest.json')
 
 
-REPORT = Path("reports/latest.json")
+def safe(value):
+    return html.escape(str(value), quote=True)
 
 
-def safe(value) -> str:
-    """Escape a value before displaying it in HTML."""
-    return html.escape(str(value))
+def badge(passed):
+    return '<span class="badge '+('pass' if passed else 'fail')+'">'+('PASS' if passed else 'FAIL')+'</span>'
+
+
+STYLE = '''
+:root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#f4f7fb;color:#172033;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1450px;margin:auto;padding:30px 24px}h1{margin:0;font-size:30px}h2{font-size:21px}.muted{color:#64748b}nav{display:flex;gap:12px;margin:20px 0}nav a,.button{padding:9px 16px;border:1px solid #d7e0ec;border-radius:9px;background:white;text-decoration:none;color:#2457c5}nav a.active{background:#2457c5;color:white}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px;margin:20px 0}.card,.conversation{background:white;border:1px solid #e2e8f0;border-radius:12px;padding:18px}.value{font-size:26px;font-weight:700}.badge{display:inline-block;border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700}.pass{color:#147d45;background:#e8f7ee}.fail{color:#b42318;background:#fff0ee}.guard{color:#855100;background:#fff4d7}.table-wrap{overflow:auto;background:white;border:1px solid #e2e8f0;border-radius:12px}table{width:100%;border-collapse:collapse;min-width:900px}th,td{text-align:left;vertical-align:top;padding:12px;border-bottom:1px solid #e2e8f0}th{background:#f8fafc}a{color:#2457c5}.conversation{margin:18px 0}summary{cursor:pointer;font-weight:700;font-size:18px}.turn{margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0}.bubble{padding:12px 16px;border-radius:10px;background:#f1f5f9;margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}.reply{background:#eef5ff}.turn-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.detail{padding:10px;background:#f8fafc;border-radius:8px;overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0}label,select{font:inherit}select{padding:7px;border:1px solid #cbd5e1;border-radius:6px}.note{font-size:13px;color:#64748b}@media(max-width:600px){main{padding:20px 12px}h1{font-size:25px}}
+'''
+
+
+def checks(case):
+    details=[]
+    for key,label in [('missing_expected','Missing expected'),('policy_violations','Forbidden text')]:
+        if case.get(key):
+            details.append(label+': '+', '.join(str(x) for x in case[key]))
+    if case.get('tool_correct') is False: details.append('Route check failed')
+    if case.get('access_correct') is False: details.append('Access check failed')
+    if case.get('error'): details.append('Agent error: '+str(case['error']))
+    if not details: details.append('All checks passed' if case.get('success') else 'Case failed; inspect raw report')
+    return '<br>'.join(safe(d) for d in details)
+
+
+def card(label,value):
+    return f'<div class="card"><div class="muted">{safe(label)}</div><div class="value">{safe(value)}</div></div>'
+
+
+def render_report(report, sessions=False, filter_mode='all'):
+    nav='<nav><a href="/" class="'+('' if sessions else 'active')+'">Single requests</a><a href="/sessions" class="'+('active' if sessions else '')+'">Conversations</a></nav>'
+    title='Conversation evaluation' if sessions else 'Single-request evaluation'
+    body='<h1>AgentEval Workbench</h1>'+nav+f'<h2>{title}</h2>'
+    if report is None:
+        filename='reports/session-latest.json' if sessions else 'reports/latest.json'
+        body+=f'<div class="card">No report available. Save a report to <strong>{filename}</strong>, then refresh.</div>'
+    else:
+        metrics=report.get('metrics',{});cases=report.get('cases',[])
+        body+=f'<p>Provider: <strong>{safe(report.get("provider","unknown"))}</strong> &nbsp; Overall gate: {badge(bool(report.get("passed")))}</p>'
+        if sessions:
+            cards=[('Conversations',metrics.get('session_count','Unavailable')),('Turns',metrics.get('turn_count','Unavailable')),('Failed turns',metrics.get('failed_turn_count','Unavailable')),('Access check failures',metrics.get('access_check_failure_count','Unavailable')),('Guard interventions',metrics.get('guard_intervention_count','Unavailable')),('Agent errors',metrics.get('error_count','Unavailable'))]
+            body+='<div class="cards">'+''.join(card(*c) for c in cards)+'</div>'
+            body+='<p class="note">Results measure the combined model and application workflow. A guard intervention is not automatically a model error. Access checks compare actual and expected reads; they are not a complete security certification.</p>'
+            options=[('all','All turns'),('failed','Failed turns'),('guards','Guard interventions')]
+            body+='<form method="get" action="/sessions"><label for="filter">Show: </label><select id="filter" name="filter">'+''.join(f'<option value="{v}"'+(' selected' if filter_mode==v else '')+f'>{l}</option>' for v,l in options)+'</select> <button class="button" type="submit">Apply</button></form>'
+            groups={}
+            for c in cases: groups.setdefault(c.get('session_id','Unknown session'),[]).append(c)
+            visible=0
+            for name,turns in groups.items():
+                shown=[t for t in turns if filter_mode=='all' or (filter_mode=='failed' and not t.get('success')) or (filter_mode=='guards' and t.get('guard_reason'))]
+                if not shown: continue
+                visible+=len(shown)
+                body+=f'<details class="conversation" open><summary>{safe(name)} &nbsp; {badge(all(t.get("success") for t in turns))}</summary><p class="muted">Customer: {safe(turns[0].get("customer_id","unknown"))} · {len(turns)} turns total</p>'
+                for t in shown:
+                    allowed=t.get('allowed_outcomes')
+                    expected=', '.join(allowed) if allowed else t.get('expected_tool','none')
+                    model=t.get('model_choice')
+                    model_text=json.dumps(model,indent=2) if model is not None else 'Not recorded in this report'
+                    guard=t.get('guard_reason') or 'No intervention'
+                    body+=f'<article class="turn"><strong>Turn {safe(t.get("turn",""))}</strong> {badge(bool(t.get("success")))}'
+                    if t.get('guard_reason'): body+=' <span class="badge guard">Guard applied</span>'
+                    body+=f'<div class="bubble"><strong>Customer</strong>\n{safe(t.get("input",""))}</div><div class="bubble reply"><strong>Agent</strong>\n{safe(t.get("answer",""))}</div><div class="turn-grid">'
+                    for label,value in [('Expected route(s)',expected),('Final route',t.get('actual_tool') or 'none'),('Model choice',model_text),('Guard reason',guard),('Attempted order',t.get('attempted_order_id') or 'none'),('Accessed orders',json.dumps(t.get('accessed_order_ids',[]))),('Expected accessed orders',json.dumps(t.get('expected_accessed_order_ids',[])))]:
+                        body+=f'<div class="detail"><strong>{safe(label)}</strong><pre>{safe(value)}</pre></div>'
+                    body+='</div><p>'+checks(t)+'</p></article>'
+                body+='</details>'
+            if not visible: body+='<p>No turns match this filter.</p>'
+        else:
+            cost=metrics.get('estimated_cost_usd')
+            cost_label='Not configured' if cost is None or (report.get('provider')=='openai' and cost==0) else f'${cost:.6f}'
+            cards=[('Task success',f'{metrics.get("task_success_rate",0):.1%}'),('Policy pass',f'{metrics.get("policy_pass_rate",0):.1%}'),('Tool correctness',f'{metrics.get("tool_correctness",0):.1%}'),('Mean latency',str(metrics.get('mean_latency_ms','Unavailable'))+' ms'),('Estimated API cost',cost_label)]
+            body+='<div class="cards">'+''.join(card(*c) for c in cards)+'</div><div class="table-wrap"><table><thead><tr><th>Case</th><th>Category</th><th>Result</th><th>Expected route</th><th>Actual route</th><th>Response</th><th>Latency</th><th>Checks</th></tr></thead><tbody>'
+            for c in cases:
+                body+='<tr>'+''.join(f'<td>{safe(c.get(k) or "none")}</td>' for k in ['id','category'])+'<td>'+badge(bool(c.get('success')))+'</td>'+''.join(f'<td>{safe(c.get(k) or "none")}</td>' for k in ['expected_tool','actual_tool','answer'])+'<td>'+safe(c.get('latency_ms','Unavailable'))+' ms</td><td>'+checks(c)+'</td></tr>'
+            body+='</tbody></table></div>'
+        download='/session-report.json' if sessions else '/report.json'
+        body+=f'<p><a href="{download}">Download raw report (JSON)</a></p>'
+    body+='<p class="note">Local report viewer. Refresh after replacing a report. Opening this page does not run tests or call a model API.</p>'
+    return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentEval Workbench</title><style>'+STYLE+'</style></head><body><main>'+body+'</main></body></html>'
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/report.json":
-            if not REPORT.exists():
-                self.send_error(404, "Run the evaluator first")
-                return
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(REPORT.read_bytes())
-            return
-
-        if self.path != "/":
-            self.send_error(404)
-            return
-
-        if not REPORT.exists():
-            self.send_error(
-                404,
-                "Run the evaluator first to create reports/latest.json",
-            )
-            return
-
+        parsed=urlsplit(self.path)
+        sessions=parsed.path in {'/sessions','/session-report.json'}
+        if parsed.path not in {'/','/sessions','/report.json','/session-report.json'}:
+            self.send_error(404);return
+        path=SESSION_REPORT if sessions else REPORT
+        raw=parsed.path.endswith('.json')
         try:
-            report = json.loads(REPORT.read_text())
-        except (OSError, json.JSONDecodeError) as error:
-            self.send_error(500, f"Could not read evaluation report: {error}")
-            return
-
-        metrics = report.get("metrics", {})
-        cases = report.get("cases", [])
-        overall_passed = bool(report.get("passed"))
-
-        rows = []
-        for case in cases:
-            passed = bool(case.get("success"))
-            result_class = "pass" if passed else "fail"
-            result_label = "PASS" if passed else "FAIL"
-
-            missing = case.get("missing_expected", [])
-            violations = case.get("policy_violations", [])
-            details = []
-
-            if missing:
-                details.append(
-                    "<strong>Missing expected:</strong> "
-                    + safe(", ".join(missing))
-                )
-            if violations:
-                details.append(
-                    "<strong>Policy violations:</strong> "
-                    + safe(", ".join(violations))
-                )
-            if not details:
-                details.append("All case checks passed.")
-
-            rows.append(
-                "<tr>"
-                f"<td>{safe(case.get('id', ''))}</td>"
-                f"<td>{safe(case.get('category', ''))}</td>"
-                f"<td><span class='badge {result_class}'>{result_label}</span></td>"
-                f"<td>{safe(case.get('expected_tool') or 'none')}</td>"
-                f"<td>{safe(case.get('actual_tool') or 'none')}</td>"
-                f"<td>{safe(case.get('latency_ms', 0))} ms</td>"
-                f"<td>{safe(case.get('answer', ''))}</td>"
-                f"<td>{'<br>'.join(details)}</td>"
-                "</tr>"
-            )
-
-        gate_class = "pass" if overall_passed else "fail"
-        gate_label = "PASS" if overall_passed else "FAIL"
-        provider = safe(report.get("provider", "unknown"))
-
-        task_rate = float(metrics.get("task_success_rate", 0))
-        policy_rate = float(metrics.get("policy_pass_rate", 0))
-        tool_rate = float(metrics.get("tool_correctness", 0))
-        latency = safe(metrics.get("mean_latency_ms", 0))
-
-        cost_value = float(metrics.get("estimated_cost_usd", 0))
-        if provider == "openai" and cost_value == 0:
-            cost_label = "Not configured"
-        else:
-            cost_label = f"${cost_value:.6f}"
-
-        page = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AgentEval Workbench</title>
-<style>
-:root {
-  color-scheme: light;
-  --ink: #172033;
-  --muted: #64748b;
-  --line: #e2e8f0;
-  --paper: #ffffff;
-  --background: #f4f7fb;
-  --green: #147d45;
-  --green-bg: #e8f7ee;
-  --red: #b42318;
-  --red-bg: #fff0ee;
-  --blue: #2457c5;
-}
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  background: var(--background);
-  color: var(--ink);
-  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-main { max-width: 1500px; margin: 0 auto; padding: 32px 24px 56px; }
-h1 { margin: 0; font-size: 30px; letter-spacing: -0.5px; }
-h2 { margin: 30px 0 12px; font-size: 20px; }
-.subtitle { margin: 5px 0 22px; color: var(--muted); }
-.statusline { margin-bottom: 22px; }
-.badge {
-  display: inline-block;
-  padding: 3px 9px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-.pass { color: var(--green); background: var(--green-bg); }
-.fail { color: var(--red); background: var(--red-bg); }
-.cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 14px;
-}
-.card {
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 17px 19px;
-  box-shadow: 0 2px 7px rgba(20, 35, 60, 0.04);
-}
-.card-label { color: var(--muted); font-size: 13px; }
-.card-value { margin-top: 4px; font-size: 25px; font-weight: 700; }
-.table-wrap {
-  overflow-x: auto;
-  background: var(--paper);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-}
-table { width: 100%; border-collapse: collapse; min-width: 1050px; }
-th, td {
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--line);
-  text-align: left;
-  vertical-align: top;
-}
-th { background: #f8fafc; color: #475569; font-size: 12px; }
-tr:last-child td { border-bottom: 0; }
-.answer { min-width: 300px; }
-.details { min-width: 220px; color: var(--muted); font-size: 13px; }
-.links { margin-top: 18px; }
-a { color: var(--blue); }
-.note { color: var(--muted); font-size: 13px; margin-top: 16px; }
-@media (max-width: 600px) {
-  main { padding: 22px 14px 40px; }
-  h1 { font-size: 25px; }
-}
-</style>
-</head>
-<body>
-<main>
-  <h1>AgentEval Workbench</h1>
-  <p class="subtitle">Evaluation report for the latest benchmark run</p>
-  <p class="statusline">Provider: <strong>__PROVIDER__</strong>
-     &nbsp; Overall gate: <span class="badge __GATE_CLASS__">__GATE_LABEL__</span></p>
-
-  <section class="cards" aria-label="Evaluation metrics">
-    <div class="card"><div class="card-label">Task success</div><div class="card-value">__TASK_RATE__</div></div>
-    <div class="card"><div class="card-label">Policy pass</div><div class="card-value">__POLICY_RATE__</div></div>
-    <div class="card"><div class="card-label">Tool correctness</div><div class="card-value">__TOOL_RATE__</div></div>
-    <div class="card"><div class="card-label">Mean latency</div><div class="card-value">__LATENCY__ ms</div></div>
-    <div class="card"><div class="card-label">Estimated API cost</div><div class="card-value">__COST__</div></div>
-  </section>
-
-  <h2>Scenario results</h2>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Case</th><th>Category</th><th>Result</th>
-          <th>Expected route</th><th>Actual route</th><th>Latency</th>
-          <th>Agent response</th><th>Check details</th>
-        </tr>
-      </thead>
-      <tbody>__ROWS__</tbody>
-    </table>
-  </div>
-
-  <p class="links"><a href="/report.json">Download the raw evaluation report (JSON)</a></p>
-  <p class="note">This dashboard is served locally on your computer. A passing gate means the run met configured thresholds; review individual failed cases too.</p>
-</main>
-</body>
-</html>
-"""
-
-        replacements = {
-            "__PROVIDER__": provider,
-            "__GATE_CLASS__": gate_class,
-            "__GATE_LABEL__": gate_label,
-            "__TASK_RATE__": f"{task_rate:.0%}",
-            "__POLICY_RATE__": f"{policy_rate:.0%}",
-            "__TOOL_RATE__": f"{tool_rate:.0%}",
-            "__LATENCY__": latency,
-            "__COST__": safe(cost_label),
-            "__ROWS__": "".join(rows),
-        }
-        for marker, value in replacements.items():
-            page = page.replace(marker, value)
-
+            report=json.loads(path.read_text()) if path.exists() else None
+            if report is not None and (not isinstance(report,dict) or not isinstance(report.get('metrics'),dict) or not isinstance(report.get('cases'),list)):
+                raise ValueError('Invalid report structure')
+            if report is not None and (('session_count' in report['metrics']) != sessions):
+                raise ValueError('Wrong report type for this view')
+        except (OSError,ValueError):
+            self.send_error(500,'Could not read a valid report for this view');return
+        if raw and report is None:
+            self.send_error(404,'No report available');return
+        mode=parse_qs(parsed.query).get('filter',['all'])[0]
+        if mode not in {'all','failed','guards'}:mode='all'
+        data=(json.dumps(report,indent=2)+'\n') if raw else render_report(report,sessions,mode)
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(page.encode("utf-8"))
+        self.send_header('Content-Type','application/json; charset=utf-8' if raw else 'text/html; charset=utf-8')
+        self.send_header('Cache-Control','no-store')
+        self.end_headers();self.wfile.write(data.encode())
 
 
 def serve():
-    """Serve the dashboard only on this computer."""
-    server = HTTPServer(("127.0.0.1", 8000), Handler)
-    print("AgentEval dashboard running at http://127.0.0.1:8000")
-    print("Press Control-C to stop the server.")
-    server.serve_forever()
+    parser=argparse.ArgumentParser()
+    parser.add_argument('--port',type=int,default=8000)
+    args=parser.parse_args()
+    with HTTPServer(('127.0.0.1',args.port),Handler) as server:
+        print(f'AgentEval dashboard running at http://127.0.0.1:{args.port}')
+        print('Press Control-C to stop the server.')
+        try:server.serve_forever()
+        except KeyboardInterrupt:print('\nDashboard stopped.')
 
-
-if __name__ == "__main__":
-    serve()
+if __name__=='__main__':serve()
