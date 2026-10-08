@@ -2,7 +2,7 @@
 import json
 import secrets
 from pathlib import Path
-from app.api_adapter import APISession
+from app.api_adapter import APISession, staging_target
 from app.session_eval import FAULTS, evaluate_sessions
 
 UPLOADS = Path('benchmarks/uploads')
@@ -49,17 +49,20 @@ def upload(text):
 def run(key):
     if not isinstance(key,str) or len(key)!=24 or any(c not in '0123456789abcdef' for c in key): raise ValueError('Invalid upload identifier')
     cases=validate((UPLOADS/(key+'.json')).read_text())
+    target=staging_target()
     report=evaluate_sessions(cases,'staging',session_factory=APISession)
+    report['chatbot_provider']=target['provider']
+    report['chatbot_model']=target.get('model')
     Path('reports').mkdir(exist_ok=True)
     filename='reports/staging-'+secrets.token_hex(8)+'.json'
     Path(filename).write_text(json.dumps(report,indent=2)+'\n')
     Path('reports/session-latest.json').write_text(json.dumps(report,indent=2)+'\n')
-    return dict(report_file=filename,passed=report['passed'],metrics=report['metrics'])
+    return dict(report_file=filename,passed=report['passed'],metrics=report['metrics'],chatbot_provider=target['provider'],chatbot_model=target.get('model'))
 
-PAGE='''<!doctype html><html lang="en"><meta charset="utf-8"><title>AgentEval benchmark upload</title><style>body{font:16px/1.5 system-ui;background:#f4f7fb;color:#172033;max-width:1000px;margin:40px auto;padding:20px}section{background:white;padding:24px;border-radius:12px;margin:20px 0}button,a{margin:8px;color:#2457c5}button{padding:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere}input{font:inherit}</style><h1>Benchmarks &amp; staging tests</h1><nav><a href="/">Single requests</a><a href="/sessions">Conversations</a><a href="/benchmarks">Upload benchmarks</a></nav><section><h2>1. Upload scenarios and expectations</h2><p>Select a JSON array or JSONL conversation benchmark. Maximum 256 KB, 50 conversations, 100 turns. This page supports the synthetic Alice/Bob staging chatbot.</p><input id="file" type="file" accept=".json,.jsonl"><button id="upload">Validate and preview</button></section><section><h2>2. Review and run</h2><p>Target: separate staging chatbot at http://127.0.0.1:8010/chat. Start it in another Terminal tab first. Messages and test faults go to the chatbot; expected outcomes remain in AgentEval.</p><pre id="preview">No benchmark uploaded.</pre><button id="run" disabled>Run staging evaluation</button><p id="status" role="status"></p><a href="/sessions">View conversation results</a></section><script>
+PAGE='''<!doctype html><html lang="en"><meta charset="utf-8"><title>AgentEval benchmark upload</title><style>body{font:16px/1.5 system-ui;background:#f4f7fb;color:#172033;max-width:1000px;margin:40px auto;padding:20px}section{background:white;padding:24px;border-radius:12px;margin:20px 0}button,a{margin:8px;color:#2457c5}button{padding:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere}input{font:inherit}</style><h1>Benchmarks &amp; staging tests</h1><nav><a href="/">Single requests</a><a href="/sessions">Conversations</a><a href="/benchmarks">Upload benchmarks</a></nav><section><h2>1. Upload scenarios and expectations</h2><p>Select a JSON array or JSONL conversation benchmark. Maximum 256 KB, 50 conversations, 100 turns. This page supports the synthetic Alice/Bob staging chatbot.</p><input id="file" type="file" accept=".json,.jsonl"><button id="upload">Validate and preview</button></section><section><h2>2. Review and run</h2><p>Target: separate staging chatbot at http://127.0.0.1:8010/chat. Start it in another Terminal tab first. The service selects demo or OpenAI mode at startup; OpenAI mode makes paid model requests. Messages and test faults go to the chatbot; expected outcomes remain in AgentEval.</p><pre id="preview">No benchmark uploaded.</pre><button id="run" disabled>Run staging evaluation</button><p id="status" role="status"></p><a href="/sessions">View conversation results</a></section><script>
 let uploadId=null;
 const status=document.getElementById('status'),preview=document.getElementById('preview'),runButton=document.getElementById('run');
 async function post(url,data){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const result=await r.json();if(!r.ok)throw Error(result.error||'Request failed');return result;}
 document.getElementById('upload').onclick=async()=>{runButton.disabled=true;uploadId=null;try{const f=document.getElementById('file').files[0];if(!f)throw Error('Select a benchmark file');if(f.size>262144)throw Error('File exceeds 256 KB');const r=await post('/benchmarks/upload',{text:await f.text()});uploadId=r.upload_id;preview.textContent=JSON.stringify(r.cases,null,2);status.textContent=`Validated ${r.session_count} conversations / ${r.turn_count} turns. Review expectations above.`;runButton.disabled=false;}catch(e){status.textContent=e.message;}};
-runButton.onclick=async()=>{runButton.disabled=true;status.textContent='Running evaluation. Keep this page open.';try{const r=await post('/benchmarks/run',{upload_id:uploadId});status.textContent=(r.passed?'PASS':'FAIL')+' — '+JSON.stringify(r.metrics)+' Report: '+r.report_file;}catch(e){status.textContent=e.message;}finally{runButton.disabled=false;}};
+runButton.onclick=async()=>{runButton.disabled=true;status.textContent='Running evaluation. Keep this page open. OpenAI mode may take several minutes.';try{const r=await post('/benchmarks/run',{upload_id:uploadId});status.textContent=(r.passed?'PASS':'FAIL')+' — chatbot: '+r.chatbot_provider+(r.chatbot_model?' / '+r.chatbot_model:'')+' — '+JSON.stringify(r.metrics)+' Report: '+r.report_file;}catch(e){status.textContent=e.message;}finally{runButton.disabled=false;}};
 </script></html>'''

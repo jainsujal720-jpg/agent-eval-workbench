@@ -11,9 +11,16 @@ class APISession:
         data = dict(customer_id=self.customer_id, message=text, session_id=self.session_id, fault=fault)
         request = Request('http://127.0.0.1:8010/chat', data=json.dumps(data).encode(),
             headers={'Content-Type':'application/json', 'Authorization':'Bearer '+os.getenv('AGENTEVAL_STAGING_TOKEN','local-demo-token')})
-        with urlopen(request, timeout=10) as response:
+        with urlopen(request, timeout=120) as response:
             result = json.load(response)
         if not isinstance(result, dict) or not isinstance(result.get('answer'), str):
             raise ValueError('Invalid chatbot response')
         self.session_id = result.pop('session_id')
         return result
+
+
+def staging_target():
+    request=Request('http://127.0.0.1:8010/health',headers={'Authorization':'Bearer '+os.getenv('AGENTEVAL_STAGING_TOKEN','local-demo-token')})
+    with urlopen(request,timeout=10) as response: target=json.load(response)
+    if not isinstance(target,dict) or target.get('provider') not in {'demo','openai'}: raise ValueError('Invalid staging provider')
+    return target

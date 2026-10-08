@@ -50,6 +50,8 @@ def render_report(report, sessions=False, filter_mode='all'):
     else:
         metrics=report.get('metrics',{});cases=report.get('cases',[])
         body+=f'<p>Provider: <strong>{safe(report.get("provider","unknown"))}</strong> &nbsp; Overall gate: {badge(bool(report.get("passed")))}</p>'
+        if report.get('chatbot_provider'):
+            body+='<p>Chatbot provider: <strong>'+safe(report['chatbot_provider'])+'</strong> · Model: '+safe(report.get('chatbot_model') or 'deterministic demo')+'</p>'
         if sessions:
             cards=[('Conversations',metrics.get('session_count','Unavailable')),('Turns',metrics.get('turn_count','Unavailable')),('Failed turns',metrics.get('failed_turn_count','Unavailable')),('Access check failures',metrics.get('access_check_failure_count','Unavailable')),('Guard interventions',metrics.get('guard_intervention_count','Unavailable')),('Agent errors',metrics.get('error_count','Unavailable')),('Handled tool failures',metrics.get('handled_tool_failure_count','Not recorded'))]
             body+='<div class="cards">'+''.join(card(*c) for c in cards)+'</div>'
