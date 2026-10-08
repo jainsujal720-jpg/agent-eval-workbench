@@ -25,8 +25,8 @@ class APIWorkflowTests(unittest.TestCase):
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         original_urlopen=__import__('urllib.request',fromlist=['urlopen']).urlopen
         def local(request,timeout):
-            request.full_url=f'http://127.0.0.1:{server.server_port}/chat'
-            body=json.loads(request.data)
+            request.full_url=f'http://127.0.0.1:{server.server_port}'+('/health' if request.full_url.endswith('/health') else '/chat')
+            body=json.loads(request.data) if request.data else {}
             self.assertNotIn('expected_tool',body)
             self.assertNotIn('expected_contains',body)
             return original_urlopen(request,timeout=timeout)

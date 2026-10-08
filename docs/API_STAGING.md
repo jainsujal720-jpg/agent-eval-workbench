@@ -39,3 +39,17 @@ python3 -m unittest discover -s tests -v
 ```
 
 Tests include real local HTTP requests, session isolation, failure injection, upload/run/report flow, benchmark rejection, and all existing regression tests. GitHub integration and CI configuration are unchanged by this update.
+
+## OpenAI mode behind the HTTP API
+
+Stop the staging service with Control-C. In that same Terminal tab, ensure OPENAI_API_KEY is set, then start:
+
+```bash
+python3 -m app.staging_api --provider openai
+```
+
+The default model is gpt-4o-mini; OPENAI_MODEL and OPENAI_BASE_URL override the model/endpoint. Missing keys or SDK stop startup with a clear error. Install the optional SDK with python3 -m pip install -e '.[openai]' if required. Keep the key only in the service environment, never in uploads or the browser. This makes paid requests using the existing session function-calling implementation, one request per turn. Guards, order service faults, and final formatting still execute locally. No real orders, refunds, or handoffs occur.
+
+Restart the dashboard after applying this update. Upload and run the same support_failures.jsonl benchmark. Report provider remains staging (HTTP transport); chatbot_provider is openai and chatbot_model records the configured model. Both appear on the results page. New reports preserve earlier demo reports. The upload page also displays the provider/model after the run. The dashboard does not select or hold the OpenAI key.
+
+The adapter checks /health before running; an unavailable staging service produces an immediate upload-page error. Requests have 120-second HTTP timeouts; the OpenAI SDK uses a 45-second request timeout and no automatic retries. The synchronous dashboard can remain busy during an evaluation. Provider errors become failed evaluation turns, not passing fallbacks. No live OpenAI call is made by unit tests; provider propagation is tested over HTTP with mocked model selection.

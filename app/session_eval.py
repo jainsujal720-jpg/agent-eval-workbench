@@ -47,7 +47,7 @@ class SupportSession:
         if self.provider != 'openai':
             raise ValueError('Unsupported provider')
         from openai import OpenAI
-        client = OpenAI(api_key=os.environ['OPENAI_API_KEY'], base_url=os.getenv('OPENAI_BASE_URL') or None)
+        client = OpenAI(api_key=os.environ['OPENAI_API_KEY'], base_url=os.getenv('OPENAI_BASE_URL') or None, timeout=45, max_retries=0)
         response = client.chat.completions.create(
             model=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'), temperature=0,
             messages=[{'role': 'system', 'content': (
