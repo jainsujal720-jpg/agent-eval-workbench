@@ -30,6 +30,7 @@ def checks(case):
             details.append(label+': '+', '.join(str(x) for x in case[key]))
     if case.get('tool_correct') is False: details.append('Route check failed')
     if case.get('access_correct') is False: details.append('Access check failed')
+    if case.get('tool_outcome_correct') is False: details.append('Tool outcome check failed')
     if case.get('error'): details.append('Agent error: '+str(case['error']))
     if not details: details.append('All checks passed' if case.get('success') else 'Case failed; inspect raw report')
     return '<br>'.join(safe(d) for d in details)
@@ -40,7 +41,7 @@ def card(label,value):
 
 
 def render_report(report, sessions=False, filter_mode='all'):
-    nav='<nav><a href="/" class="'+('' if sessions else 'active')+'">Single requests</a><a href="/sessions" class="'+('active' if sessions else '')+'">Conversations</a></nav>'
+    nav='<nav><a href="/" class="'+('' if sessions else 'active')+'">Single requests</a><a href="/sessions" class="'+('active' if sessions else '')+'">Conversations</a><a href="/benchmarks">Upload benchmarks</a></nav>'
     title='Conversation evaluation' if sessions else 'Single-request evaluation'
     body='<h1>AgentEval Workbench</h1>'+nav+f'<h2>{title}</h2>'
     if report is None:
@@ -50,7 +51,7 @@ def render_report(report, sessions=False, filter_mode='all'):
         metrics=report.get('metrics',{});cases=report.get('cases',[])
         body+=f'<p>Provider: <strong>{safe(report.get("provider","unknown"))}</strong> &nbsp; Overall gate: {badge(bool(report.get("passed")))}</p>'
         if sessions:
-            cards=[('Conversations',metrics.get('session_count','Unavailable')),('Turns',metrics.get('turn_count','Unavailable')),('Failed turns',metrics.get('failed_turn_count','Unavailable')),('Access check failures',metrics.get('access_check_failure_count','Unavailable')),('Guard interventions',metrics.get('guard_intervention_count','Unavailable')),('Agent errors',metrics.get('error_count','Unavailable'))]
+            cards=[('Conversations',metrics.get('session_count','Unavailable')),('Turns',metrics.get('turn_count','Unavailable')),('Failed turns',metrics.get('failed_turn_count','Unavailable')),('Access check failures',metrics.get('access_check_failure_count','Unavailable')),('Guard interventions',metrics.get('guard_intervention_count','Unavailable')),('Agent errors',metrics.get('error_count','Unavailable')),('Handled tool failures',metrics.get('handled_tool_failure_count','Not recorded'))]
             body+='<div class="cards">'+''.join(card(*c) for c in cards)+'</div>'
             body+='<p class="note">Results measure the combined model and application workflow. A guard intervention is not automatically a model error. Access checks compare actual and expected reads; they are not a complete security certification.</p>'
             options=[('all','All turns'),('failed','Failed turns'),('guards','Guard interventions')]
@@ -72,7 +73,7 @@ def render_report(report, sessions=False, filter_mode='all'):
                     body+=f'<article class="turn"><strong>Turn {safe(t.get("turn",""))}</strong> {badge(bool(t.get("success")))}'
                     if t.get('guard_reason'): body+=' <span class="badge guard">Guard applied</span>'
                     body+=f'<div class="bubble"><strong>Customer</strong>\n{safe(t.get("input",""))}</div><div class="bubble reply"><strong>Agent</strong>\n{safe(t.get("answer",""))}</div><div class="turn-grid">'
-                    for label,value in [('Expected route(s)',expected),('Final route',t.get('actual_tool') or 'none'),('Model choice',model_text),('Guard reason',guard),('Attempted order',t.get('attempted_order_id') or 'none'),('Accessed orders',json.dumps(t.get('accessed_order_ids',[]))),('Expected accessed orders',json.dumps(t.get('expected_accessed_order_ids',[])))]:
+                    for label,value in [('Expected route(s)',expected),('Final route',t.get('actual_tool') or 'none'),('Model choice',model_text),('Guard reason',guard),('Injected fault',t.get('injected_fault','Not recorded')),('Tool outcome',t.get('tool_outcome','Not recorded')),('Expected tool outcome',t.get('expected_tool_outcome') or 'Not specified'),('Attempted order',t.get('attempted_order_id') or 'none'),('Accessed orders',json.dumps(t.get('accessed_order_ids',[]))),('Expected accessed orders',json.dumps(t.get('expected_accessed_order_ids',[])))]:
                         body+=f'<div class="detail"><strong>{safe(label)}</strong><pre>{safe(value)}</pre></div>'
                     body+='</div><p>'+checks(t)+'</p></article>'
                 body+='</details>'
@@ -92,8 +93,33 @@ def render_report(report, sessions=False, filter_mode='all'):
 
 
 class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        from app.benchmark_upload import upload, run
+        if self.headers.get('Content-Type','').split(';')[0] != 'application/json':
+            self.send_error(415); return
+        origin=self.headers.get('Origin')
+        expected='http://'+self.headers.get('Host','')
+        if origin and origin != expected:
+            self.send_error(403); return
+        try:
+            size=int(self.headers.get('Content-Length','0'))
+            if not 0 < size <= 524288: raise ValueError('Invalid upload size')
+            data=json.loads(self.rfile.read(size))
+            if self.path == '/benchmarks/upload': result=upload(data['text'])
+            elif self.path == '/benchmarks/run': result=run(data['upload_id'])
+            else: self.send_error(404); return
+            code=200
+        except (ValueError,KeyError,TypeError,OSError) as exc:
+            result={'error': str(exc) if isinstance(exc,ValueError) else 'Could not process benchmark request'};code=400
+        self.send_response(code)
+        self.send_header('Content-Type','application/json')
+        self.end_headers(); self.wfile.write(json.dumps(result).encode())
     def do_GET(self):
         parsed=urlsplit(self.path)
+        if parsed.path == '/benchmarks':
+            from app.benchmark_upload import PAGE
+            self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8')
+            self.end_headers(); self.wfile.write(PAGE.encode()); return
         sessions=parsed.path in {'/sessions','/session-report.json'}
         if parsed.path not in {'/','/sessions','/report.json','/session-report.json'}:
             self.send_error(404);return

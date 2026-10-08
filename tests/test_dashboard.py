@@ -54,5 +54,6 @@ class DashboardTests(unittest.TestCase):
                     session.write_text('{broken')
                     with self.assertRaises(HTTPError) as error:urlopen(base+'/sessions')
                     self.assertEqual(error.exception.code,500)
+                    error.exception.close()
                 finally:
                     server.shutdown();thread.join();server.server_close()
