@@ -3,6 +3,7 @@ import argparse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import html
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
@@ -41,7 +42,7 @@ def card(label,value):
 
 
 def render_report(report, sessions=False, filter_mode='all'):
-    nav='<nav><a href="/" class="'+('' if sessions else 'active')+'">Single requests</a><a href="/sessions" class="'+('active' if sessions else '')+'">Conversations</a><a href="/benchmarks">Upload benchmarks</a></nav>'
+    nav='<nav><a href="/" class="'+('' if sessions else 'active')+'">Single requests</a><a href="/sessions" class="'+('active' if sessions else '')+'">Conversations</a><a href="/benchmarks">Upload benchmarks</a><a href="/benchmark-history">Run history</a></nav>'
     title='Conversation evaluation' if sessions else 'Single-request evaluation'
     body='<h1>AgentEval Workbench</h1>'+nav+f'<h2>{title}</h2>'
     if report is None:
@@ -96,21 +97,22 @@ def render_report(report, sessions=False, filter_mode='all'):
 
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        from app.benchmark_upload import upload, run
+        from app.benchmark_upload import upload, enqueue
         if self.headers.get('Content-Type','').split(';')[0] != 'application/json':
             self.send_error(415); return
         origin=self.headers.get('Origin')
         expected='http://'+self.headers.get('Host','')
         if origin and origin != expected:
             self.send_error(403); return
+        code=200
         try:
             size=int(self.headers.get('Content-Length','0'))
             if not 0 < size <= 524288: raise ValueError('Invalid upload size')
             data=json.loads(self.rfile.read(size))
             if self.path == '/benchmarks/upload': result=upload(data['text'])
-            elif self.path == '/benchmarks/run': result=run(data['upload_id'])
+            elif self.path == '/benchmarks/run':
+                result={'job_id':enqueue(data['upload_id'])}; code=202
             else: self.send_error(404); return
-            code=200
         except (ValueError,KeyError,TypeError,OSError) as exc:
             result={'error': str(exc) if isinstance(exc,ValueError) else 'Could not process benchmark request'};code=400
         self.send_response(code)
@@ -122,10 +124,41 @@ class Handler(BaseHTTPRequestHandler):
             from app.benchmark_upload import PAGE
             self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8')
             self.end_headers(); self.wfile.write(PAGE.encode()); return
+        from app.benchmark_upload import job_status
+        if parsed.path.startswith('/benchmarks/jobs/'):
+            job=job_status(parsed.path.rsplit('/',1)[-1])
+            if not job: self.send_error(404); return
+            self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Cache-Control','no-store')
+            self.end_headers(); self.wfile.write(json.dumps(job).encode()); return
+        if parsed.path == '/benchmark-history':
+            from app.benchmark_upload import HISTORY_PAGE
+            self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store')
+            self.end_headers(); self.wfile.write(HISTORY_PAGE.encode()); return
+        if parsed.path == '/benchmarks/history.json':
+            reports=Path('reports'); rows=[]
+            for candidate in sorted(reports.glob('staging-*.json'),key=lambda f:f.stat().st_mtime,reverse=True)[:100]:
+                try:
+                    item=json.loads(candidate.read_text())
+                    rows.append({'file':candidate.name,'created_at':item.get('created_at'),'chatbot_provider':item.get('chatbot_provider'),'chatbot_model':item.get('chatbot_model'),'passed':item.get('passed'),'metrics':item.get('metrics',{})})
+                except (OSError,ValueError): continue
+            self.send_response(200); self.send_header('Content-Type','application/json; charset=utf-8'); self.send_header('Cache-Control','no-store')
+            self.end_headers(); self.wfile.write(json.dumps(rows).encode()); return
+        if parsed.path.startswith('/reports/'):
+            name=parsed.path.removeprefix('/reports/')
+            if not re.fullmatch(r'staging-[a-f0-9]+\.json',name): self.send_error(404); return
+            target=Path('reports')/name
+            if not target.is_file(): self.send_error(404); return
+            self.send_response(200); self.send_header('Content-Type','application/json; charset=utf-8'); self.send_header('Content-Disposition','attachment; filename="'+name+'"')
+            self.end_headers(); self.wfile.write(target.read_bytes()); return
         sessions=parsed.path in {'/sessions','/session-report.json'}
         if parsed.path not in {'/','/sessions','/report.json','/session-report.json'}:
             self.send_error(404);return
         path=SESSION_REPORT if sessions else REPORT
+        report_name=parse_qs(parsed.query).get('report',[''])[0]
+        if sessions and report_name:
+            if not re.fullmatch(r'staging-[a-f0-9]+\.json',report_name):
+                self.send_error(400,'Invalid report name'); return
+            path=Path('reports')/report_name
         raw=parsed.path.endswith('.json')
         try:
             report=json.loads(path.read_text()) if path.exists() else None
