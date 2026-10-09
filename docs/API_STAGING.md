@@ -28,9 +28,9 @@ Both servers bind localhost. The shared demo bearer token defaults to local-demo
 
 ## Company adaptation
 
-Replace the adapter's fixed URL and request/response mapping with the company's staging API contract. Use its real test authentication; do not trust customer identity from chat messages. Obtain trusted tool/access traces if you want to evaluate records used. Fault injection should use company-approved staging controls. Add company policies and fixtures to benchmarks. The current upload page targets only this local staging service and does not execute arbitrary URLs or uploaded code.
+Configure the adapter URL, request and response field names, authentication header, and response JSON paths using the environment variables in `docs/COMPANY_API_ADAPTER.md`. Use its real test authentication; do not trust customer identity from chat messages. Obtain trusted tool/access traces if you want to evaluate records used. Fault injection should use company-approved staging controls. Add company policies and fixtures to benchmarks. The current upload page targets only this local staging service and does not execute arbitrary URLs or uploaded code.
 
-Evaluation runs synchronously; 100 turns maximum, each HTTP call has a 10-second timeout. An unavailable service produces failed/error rows rather than a pass. A background job runner would be needed for larger or slow company evaluations.
+Dashboard evaluations run as background jobs. The upload page polls turn progress while you wait. The Run history page keeps up to 100 reports and lets you reopen or download each saved result. Uploads are limited to 50 conversations, 100 turns, and 256 KB. Each chatbot call has a configurable timeout, 120 seconds by default. Jobs are in memory and stop if you stop the dashboard; saved reports persist on disk.
 
 ## Verification
 
@@ -38,7 +38,7 @@ Evaluation runs synchronously; 100 turns maximum, each HTTP call has a 10-second
 python3 -m unittest discover -s tests -v
 ```
 
-Tests include real local HTTP requests, session isolation, failure injection, upload/run/report flow, benchmark rejection, and all existing regression tests. GitHub integration and CI configuration are unchanged by this update.
+Tests include negative behavior mutations, configurable adapter request/response mapping, background job status, upload validation, local HTTP round trips, session isolation, failure injection, and all existing regressions. Local HTTP listener tests are skipped in restricted runtimes that prohibit localhost sockets; they run in ordinary local/GitHub Actions environments.
 
 ## OpenAI mode behind the HTTP API
 
@@ -52,4 +52,4 @@ The default model is gpt-4o-mini; OPENAI_MODEL and OPENAI_BASE_URL override the 
 
 Restart the dashboard after applying this update. Upload and run the same support_failures.jsonl benchmark. Report provider remains staging (HTTP transport); chatbot_provider is openai and chatbot_model records the configured model. Both appear on the results page. New reports preserve earlier demo reports. The upload page also displays the provider/model after the run. The dashboard does not select or hold the OpenAI key.
 
-The adapter checks /health before running; an unavailable staging service produces an immediate upload-page error. Requests have 120-second HTTP timeouts; the OpenAI SDK uses a 45-second request timeout and no automatic retries. The synchronous dashboard can remain busy during an evaluation. Provider errors become failed evaluation turns, not passing fallbacks. No live OpenAI call is made by unit tests; provider propagation is tested over HTTP with mocked model selection.
+The adapter checks the local /health endpoint or an optional configured company health URL before running; a target without a health endpoint can declare provider/model through environment variables. An unavailable staging service produces an immediate upload-page error. Requests have 120-second HTTP timeouts; the OpenAI SDK uses a 45-second request timeout and no automatic retries. The dashboard remains available while the evaluation runs in a worker thread. Provider errors become failed evaluation turns, not passing fallbacks. No live OpenAI call is made by unit tests; provider propagation is tested over HTTP with mocked model selection.

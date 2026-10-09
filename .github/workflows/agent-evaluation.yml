@@ -9,20 +9,28 @@ permissions:
 
 jobs:
   evaluate-agent:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6.2.0
         with:
           python-version: "3.12"
-      - name: Unit tests
-        run: python -m unittest discover -s tests -v
-      - name: Run agent benchmark and release gate
-        run: python -m app.evaluate --benchmark benchmarks/support.jsonl --output reports/ci-report.json
-      - name: Upload benchmark report
+      - name: Unit and regression tests
+        run: AGENTEVAL_PROVIDER=demo python -m unittest discover -s tests -v
+      - name: Run release benchmark
+        run: AGENTEVAL_PROVIDER=demo python -m app.evaluate --benchmark benchmarks/support.jsonl --output reports/ci-support.json
+      - name: Run conversation authorization benchmark
+        run: AGENTEVAL_PROVIDER=demo python -m app.session_eval --benchmark benchmarks/support_sessions.jsonl --output reports/ci-sessions.json
+      - name: Run tool failure benchmark
+        run: AGENTEVAL_PROVIDER=demo python -m app.session_eval --benchmark benchmarks/support_failures.jsonl --output reports/ci-failures.json
+      - name: Record stress benchmark baseline (known demo-agent failures)
         if: always()
-        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        run: AGENTEVAL_PROVIDER=demo python -m app.evaluate --benchmark benchmarks/support_stress.jsonl --output reports/ci-stress-baseline.json
+      - name: Upload evaluation reports
+        if: always()
+        uses: actions/upload-artifact@v6
         with:
-          name: agent-evaluation-report
-          path: reports/ci-report.json
+          name: agent-evaluation-reports
+          path: reports/ci-*.json
           if-no-files-found: ignore

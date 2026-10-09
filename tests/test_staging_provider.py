@@ -1,5 +1,6 @@
 import os
 import subprocess
+import socket
 import sys
 import threading
 import unittest
@@ -17,6 +18,12 @@ class StagingProviderTests(unittest.TestCase):
         self.assertIn('OPENAI_API_KEY must be set',result.stderr)
 
     def test_openai_provider_and_metadata_cross_http(self):
+        try:
+            probe=socket.socket()
+            probe.bind(('127.0.0.1',0))
+            probe.close()
+        except OSError:
+            self.skipTest('This runtime does not permit localhost listener sockets')
         previous=StagingHandler.provider
         StagingHandler.provider='openai'
         server=ThreadingHTTPServer(('127.0.0.1',0),StagingHandler)

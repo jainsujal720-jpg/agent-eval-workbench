@@ -1,4 +1,5 @@
 import json
+import socket
 from pathlib import Path
 import tempfile
 import threading
@@ -36,6 +37,12 @@ class DashboardTests(unittest.TestCase):
         self.assertIn('reports/session-latest.json',dashboard.render_report(None,True))
 
     def test_http_views_and_download_are_separate(self):
+        try:
+            probe=socket.socket()
+            probe.bind(('127.0.0.1',0))
+            probe.close()
+        except OSError:
+            self.skipTest('This runtime does not permit localhost listener sockets')
         with tempfile.TemporaryDirectory() as folder:
             regular=Path(folder)/'regular.json';session=Path(folder)/'session.json'
             regular.write_text(json.dumps(dict(provider='demo',passed=True,metrics={},cases=[])))

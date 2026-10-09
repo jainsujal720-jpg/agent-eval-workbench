@@ -79,3 +79,7 @@ These are sample metrics, not universal release standards. Thresholds live in `a
 ## Project brief
 
 See [`docs/PROJECT_BRIEF.md`](docs/PROJECT_BRIEF.md) for product framing, API behavior, CI/CD flow, limitations, and a manual run checklist.
+
+## Workbench improvements and deployment roadmap
+
+See [the current hardening and Hugging Face roadmap](docs/NEXT_STAGES.md), [company staging API configuration](docs/COMPANY_API_ADAPTER.md), and [staging/upload workflow](docs/API_STAGING.md). The next hosting milestone after CI, evaluator negative tests, asynchronous dashboard history, and configurable company API testing is a Docker-based Hugging Face Space using synthetic data only.

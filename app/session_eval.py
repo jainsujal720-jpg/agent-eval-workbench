@@ -155,7 +155,7 @@ class SupportSession:
                     model_choice=model_choice, guard_reason=guard_reason, tool_outcome=tool_outcome)
 
 
-def evaluate_sessions(cases, provider, session_factory=None):
+def evaluate_sessions(cases, provider, session_factory=None, progress_callback=None):
     rows=[]
     for case in cases:
         session=(session_factory or SupportSession)(case['customer_id'], provider)
@@ -184,6 +184,8 @@ def evaluate_sessions(cases, provider, session_factory=None):
                 missing_expected=missing,policy_violations=violations,tool_correct=tool_ok,
                 access_correct=access_ok,tool_outcome_correct=outcome_ok,
                 injected_fault=turn.get('fault','none'),expected_tool_outcome=turn.get('expected_tool_outcome'),error=error,category=case['category'],critical=True,**result))
+            if progress_callback:
+                progress_callback(len(rows), sum(len(c['turns']) for c in cases))
     return dict(provider=provider,passed=bool(rows) and all(r['success'] for r in rows),
         metrics=dict(session_count=len(cases),turn_count=len(rows),
                      failed_turn_count=sum(not r['success'] for r in rows),
