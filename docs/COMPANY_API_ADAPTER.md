@@ -1,10 +1,10 @@
 # Configuring a company staging API
 
-AgentEval can call an approved HTTPS staging endpoint without changing the evaluator. Set these environment variables in the Terminal tab that starts the dashboard (the API token is read by that process and is never saved in benchmark files):
+AgentEval can call an approved HTTPS staging endpoint without changing the evaluator. For a company pilot, run it inside the company's approved private environment and inject the API token into the process from its secret manager. Do not type a real token into a shell command, save it in a `.env` file, or put it in the benchmark. The process reads the token from its environment and does not write it to benchmark or report files.
 
 ```bash
 export AGENTEVAL_CHAT_URL='https://staging.example.com/support/chat'
-export AGENTEVAL_AUTH_TOKEN='your-staging-token'
+# AGENTEVAL_AUTH_TOKEN is injected by the approved runtime secret manager.
 export AGENTEVAL_AUTH_HEADER='Authorization'
 export AGENTEVAL_AUTH_SCHEME='Bearer'
 export AGENTEVAL_CUSTOMER_FIELD='customer_id'
@@ -26,4 +26,4 @@ Responses must include an answer string, final route string, conversation/sessio
 
 The benchmark's `customer_id` is test input. A company must map it to a real test identity through its approved staging authentication mechanism; do not let a production service trust this JSON field as proof of identity. Never use production credentials, customer data, or a real refund/handoff endpoint for this demo. `AGENTEVAL_HTTP_TIMEOUT_SECONDS` defaults to 120. Company endpoint connectivity and auth are tested only against a company-approved staging environment.
 
-For current environment variable names and the deployment sequence, see `docs/NEXT_STAGES.md`. Hugging Face Spaces hosting is intentionally the next deployment milestone after the four implementation priorities are tested and merged.
+For the company-controlled CI/API pilot and public demo separation, see [`DEPLOYMENT_MODES.md`](DEPLOYMENT_MODES.md). Hugging Face Spaces is for the synthetic public demo only; never place a real company token or confidential benchmark there.

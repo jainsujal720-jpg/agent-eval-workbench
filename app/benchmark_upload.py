@@ -1,10 +1,12 @@
 """Validated conversation benchmark upload and local staging evaluation."""
 import json
+import os
 import secrets
 from pathlib import Path
 from app.api_adapter import APISession, staging_target
 from app.session_eval import FAULTS, evaluate_sessions
-
+from app.visitor_data import report_directory, upload_path
+from app.upload_security import reject_credential_like_content
 UPLOADS = Path('benchmarks/uploads')
 ROUTES = {'order_lookup','ask_order_id','access_denied','human_handoff','tool_unavailable','tool_invalid_response'}
 
@@ -39,27 +41,40 @@ def validate(text):
     if total > 100: raise ValueError('Maximum 100 turns per upload')
     return cases
 
-def upload(text):
+def upload(text,owner=None):
+    reject_credential_like_content(text)
     cases=validate(text)
-    UPLOADS.mkdir(parents=True,exist_ok=True)
     key=secrets.token_hex(12)
-    (UPLOADS/(key+'.json')).write_text(json.dumps(cases,indent=2)+'\n')
+    target=upload_path(key,owner) if owner else UPLOADS/(key+'.json')
+    target.parent.mkdir(parents=True,exist_ok=True)
+    files=sorted(target.parent.glob('*.json'),key=lambda item:item.stat().st_mtime)
+    with JOBS_LOCK:
+        protected={job.get('upload_id') for job in JOBS.values() if job.get('status') in {'queued','running'} and job.get('owner')==owner}
+    while len(files) >= 20:
+        removable=next((item for item in files if item.stem not in protected),None)
+        if removable is None: raise ValueError('Upload limit reached while evaluations are running')
+        removable.unlink()
+        files.remove(removable)
+    target.write_text(json.dumps(cases,indent=2)+'\n')
     return dict(upload_id=key, cases=cases, session_count=len(cases),turn_count=sum(len(c['turns']) for c in cases))
 
-def run(key):
+def run(key,owner=None):
     if not isinstance(key,str) or len(key)!=24 or any(c not in '0123456789abcdef' for c in key): raise ValueError('Invalid upload identifier')
-    cases=validate((UPLOADS/(key+'.json')).read_text())
+    source=upload_path(key,owner) if owner else UPLOADS/(key+'.json')
+    cases=validate(source.read_text())
     target=staging_target()
     report=evaluate_sessions(cases,'staging',session_factory=APISession)
     report['chatbot_provider']=target['provider']
     report['chatbot_model']=target.get('model')
-    Path('reports').mkdir(exist_ok=True)
-    filename='reports/staging-'+secrets.token_hex(8)+'.json'
+    output_dir=report_directory(owner)
+    output_dir.mkdir(parents=True,exist_ok=True)
+    filename=str(output_dir/('staging-'+secrets.token_hex(8)+'.json'))
     Path(filename).write_text(json.dumps(report,indent=2)+'\n')
-    Path('reports/session-latest.json').write_text(json.dumps(report,indent=2)+'\n')
+    if owner is None:
+        Path('reports/session-latest.json').write_text(json.dumps(report,indent=2)+'\n')
     return dict(report_file=filename,passed=report['passed'],metrics=report['metrics'],chatbot_provider=target['provider'],chatbot_model=target.get('model'))
 
-PAGE='''<!doctype html><html lang="en"><meta charset="utf-8"><title>AgentEval benchmark upload</title><style>body{font:16px/1.5 system-ui;background:#f4f7fb;color:#172033;max-width:1000px;margin:40px auto;padding:20px}section{background:white;padding:24px;border-radius:12px;margin:20px 0}button,a{margin:8px;color:#2457c5}button{padding:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere}input{font:inherit}</style><h1>Benchmarks &amp; staging tests</h1><nav><a href="/">Single requests</a><a href="/sessions">Conversations</a><a href="/benchmarks">Upload benchmarks</a><a href="/benchmark-history">Run history</a></nav><section><h2>1. Upload scenarios and expectations</h2><p>Select a JSON array or JSONL conversation benchmark. Maximum 256 KB, 50 conversations, 100 turns. This page supports the synthetic Alice/Bob staging chatbot.</p><input id="file" type="file" accept=".json,.jsonl"><button id="upload">Validate and preview</button></section><section><h2>2. Review and run</h2><p>Target: separate staging chatbot at http://127.0.0.1:8010/chat. Start it in another Terminal tab first. The service selects demo or OpenAI mode at startup; OpenAI mode makes paid model requests. Messages and test faults go to the chatbot; expected outcomes remain in AgentEval.</p><pre id="preview">No benchmark uploaded.</pre><button id="run" disabled>Run staging evaluation</button><p id="status" role="status"></p><a href="/sessions">View conversation results</a> · <a href="/benchmark-history">Run history</a></section><script>
+PAGE='''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentEval benchmark upload</title><style>body{font:16px/1.5 system-ui;background:#f4f7fb;color:#172033;max-width:1000px;margin:40px auto;padding:20px}section{background:white;padding:24px;border-radius:12px;margin:20px 0}button,a{margin:8px;color:#2457c5}button{padding:12px}pre{white-space:pre-wrap;overflow-wrap:anywhere}input{font:inherit}.warning{background:#fff4d7;padding:12px;border-radius:8px}</style><h1>AgentEval public demo</h1><nav><a href="/">Home</a><a href="/sessions">Conversations</a><a href="/benchmarks">Upload benchmarks</a><a href="/benchmark-history">Run history</a></nav><section><h2>1. Choose test scenarios</h2><p>This public demo uses a deterministic chatbot and synthetic Alice/Bob fixtures. It makes no model API calls and connects to no company systems. Upload a JSON array or JSONL conversation benchmark (maximum 256 KB, 50 conversations, 100 turns), or <a href="/sample-benchmark">download the sample benchmark</a>.</p><p class="warning"><strong>Public demo:</strong> uploads and reports are private to your browser session and automatically deleted after 30 minutes without activity or when you clear them. Still upload only synthetic or public test data; never upload customer information, credentials, or confidential company data.</p><input id="file" type="file" accept=".json,.jsonl"><button id="upload">Validate and preview</button></section><section><h2>2. Review and run</h2><p>Review the expected outcomes before you run. Only one evaluation can run at a time. Uploads and report history are temporary and may be cleared when the Space restarts.</p><pre id="preview">No benchmark uploaded.</pre><button id="run" disabled>Run evaluation</button><p id="status" role="status"></p><a href="/sessions">View conversation results</a> · <a href="/benchmark-history">Run history</a></section><script>
 let uploadId=null;
 const status=document.getElementById('status'),preview=document.getElementById('preview'),runButton=document.getElementById('run');
 async function post(url,data){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});const result=await r.json();if(!r.ok)throw Error(result.error||'Request failed');return result;}
@@ -73,34 +88,52 @@ import time
 JOBS = {}
 JOBS_LOCK = threading.Lock()
 
-def enqueue(key):
+def enqueue(key,owner=None):
     if not isinstance(key,str) or len(key)!=24 or any(c not in '0123456789abcdef' for c in key): raise ValueError('Invalid upload identifier')
+    source=upload_path(key,owner) if owner else UPLOADS/(key+'.json')
+    if not source.is_file(): raise ValueError('Uploaded benchmark has expired or was cleared; upload it again')
     job_id=secrets.token_hex(12)
-    with JOBS_LOCK: JOBS[job_id]={'id':job_id,'status':'queued','completed_turns':0,'total_turns':None,'created_at':time.time()}
+    with JOBS_LOCK:
+        if any(job.get('status') in {'queued','running'} for job in JOBS.values()):
+            raise ValueError('An evaluation is already running; wait for it to finish before starting another')
+        JOBS[job_id]={'id':job_id,'upload_id':key,'owner':owner,'status':'queued','completed_turns':0,'total_turns':None,'created_at':time.time()}
     def work():
         with JOBS_LOCK: JOBS[job_id]['status']='running'
         try:
-            cases=validate((UPLOADS/(key+'.json')).read_text())
+            cases=validate(source.read_text())
             with JOBS_LOCK: JOBS[job_id]['total_turns']=sum(len(c['turns']) for c in cases)
             def progress(done,total):
                 with JOBS_LOCK: JOBS[job_id]['completed_turns']=done
             target=staging_target()
             report=evaluate_sessions(cases,'staging',session_factory=APISession,progress_callback=progress)
             report.update(chatbot_provider=target['provider'],chatbot_model=target.get('model'),created_at=time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()))
-            Path('reports').mkdir(exist_ok=True)
-            filename='reports/staging-'+secrets.token_hex(8)+'.json'
+            output_dir=report_directory(owner)
+            output_dir.mkdir(parents=True,exist_ok=True)
+            filename=str(output_dir/('staging-'+secrets.token_hex(8)+'.json'))
             Path(filename).write_text(json.dumps(report,indent=2)+'\n')
-            Path('reports/session-latest.json').write_text(json.dumps(report,indent=2)+'\n')
+            if owner is None:
+                Path('reports/session-latest.json').write_text(json.dumps(report,indent=2)+'\n')
             with JOBS_LOCK:
-                JOBS[job_id].update(status='completed',result={'report_file':filename,'passed':report['passed'],'metrics':report['metrics'],'chatbot_provider':target['provider'],'chatbot_model':target.get('model')})
+                report_name=Path(filename).name if owner else filename
+                JOBS[job_id].update(status='completed',result={'report_file':report_name,'passed':report['passed'],'metrics':report['metrics'],'chatbot_provider':target['provider'],'chatbot_model':target.get('model')})
         except Exception as exc:
             with JOBS_LOCK: JOBS[job_id].update(status='failed',error=type(exc).__name__)
     threading.Thread(target=work,daemon=True).start()
     return job_id
 
-def job_status(job_id):
+def job_status(job_id,owner=None):
     with JOBS_LOCK:
         job=JOBS.get(job_id)
-        return dict(job) if job else None
+        if not job or job.get('owner')!=owner: return None
+        visible=dict(job)
+        visible.pop('owner',None)
+        visible.pop('upload_id',None)
+        return visible
 
 HISTORY_PAGE='''<!doctype html><html lang="en"><meta charset="utf-8"><title>AgentEval run history</title><style>body{font:16px/1.5 system-ui;background:#f4f7fb;color:#172033;max-width:1100px;margin:40px auto;padding:20px}section{background:white;padding:20px;border-radius:12px;margin:12px 0}a{color:#2457c5}</style><h1>Benchmark run history</h1><nav><a href="/benchmarks">Upload benchmarks</a> · <a href="/sessions">Latest conversation report</a></nav><div id="runs">Loading reports…</div><script>fetch('/benchmarks/history.json').then(r=>r.json()).then(rows=>{const root=document.getElementById('runs');root.textContent='';if(!rows.length){root.textContent='No saved runs yet.';return;}for(const x of rows){const section=document.createElement('section'),summary=document.createElement('div');summary.textContent=`${x.created_at||'Date unavailable'} · ${x.chatbot_provider||'unknown'} ${x.chatbot_model||''} · ${x.passed?'PASS':'FAIL'} · ${x.metrics?.turn_count||0} turns · ${x.metrics?.failed_turn_count||0} failed · `;const view=document.createElement('a');view.href='/sessions?report='+encodeURIComponent(x.file);view.textContent='Open report';const download=document.createElement('a');download.href='/reports/'+encodeURIComponent(x.file);download.textContent='Download JSON';section.append(summary,view,document.createTextNode(' · '),download);root.append(section);}}).catch(()=>document.getElementById('runs').textContent='Could not load report history.');</script></html>'''
+
+if os.getenv('AGENTEVAL_SPACE_DEMO') == '1':
+    _clear_control='<button type="button" onclick="clearDemoData()">Clear my data</button>'
+    _clear_script='<script>async function clearDemoData(){if(!confirm("Delete your uploads and reports now?"))return;const r=await fetch("/privacy/clear",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});if(r.ok)location.href="/benchmarks";else alert((await r.json()).error||"Could not clear data")}</script>'
+    PAGE=PAGE.replace('</nav>','</nav>'+_clear_control).replace('</script></html>',_clear_script+'</script></html>')
+    HISTORY_PAGE=HISTORY_PAGE.replace('</nav>','</nav>'+_clear_control).replace('</script></html>',_clear_script+'</script></html>')

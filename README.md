@@ -1,3 +1,12 @@
+---
+title: AgentEval Workbench
+emoji: 🧪
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+---
+
 # AgentEval Workbench
 
 A small, portfolio-ready benchmark and CI/CD demo for evaluating AI agent changes before release. The synthetic business is ShopCo, an online retailer with order status, returns, and refund-review support.
@@ -9,12 +18,12 @@ Teams can inspect agent runs, but need a repeatable way to tell whether a change
 ## What is included
 
 - A deterministic sample support agent with a simulated read-only order lookup (no model key required).
-- A six-case realistic synthetic benchmark covering refund policy, missing information, order status, and security handoff.
-- A runner that reports success rate, policy pass rate, tool correctness, latency, and estimated cost.
+- Synthetic single-turn, multi-turn, authorization, tool-failure, and stress benchmarks for support scenarios.
+- A runner that reports task success, policy pass rate, route correctness, latency, access behavior, and estimated cost.
 - Threshold-based release gating and machine-readable JSON output.
-- Unit tests and a GitHub Actions workflow triggered on pushes and pull requests.
+- Unit tests and GitHub Actions gates for release, authorization, and tool-failure behavior on pushes and pull requests.
 - Optional OpenAI-compatible model API adapter, disabled unless explicitly configured.
-- Baseline metric comparison and a local browser dashboard.
+- Benchmark upload, background evaluation jobs, report history, and a browser dashboard.
 
 ## Run locally
 
@@ -64,7 +73,7 @@ Each JSONL row contains an `id`, `category`, `input`, `expected_contains` list, 
 
 ## CI/CD behavior
 
-`.github/workflows/agent-evaluation.yml` runs unit tests, executes the benchmark, and uploads the report. Pull requests receive a pass/fail check. To deploy after successful evaluation, add a separate deploy job with the deployment action and credentials for your chosen host; this starter intentionally stops at the release gate.
+`.github/workflows/agent-evaluation.yml` runs unit tests, release, conversation authorization, and tool-failure benchmarks, then uploads reports. Pull requests receive a pass/fail check. The stress benchmark is retained as a known baseline and its expected demo-agent failures do not fail the release gate.
 
 ## Product metrics in this prototype
 
@@ -82,4 +91,8 @@ See [`docs/PROJECT_BRIEF.md`](docs/PROJECT_BRIEF.md) for product framing, API be
 
 ## Workbench improvements and deployment roadmap
 
-See [the current hardening and Hugging Face roadmap](docs/NEXT_STAGES.md), [company staging API configuration](docs/COMPANY_API_ADAPTER.md), and [staging/upload workflow](docs/API_STAGING.md). The next hosting milestone after CI, evaluator negative tests, asynchronous dashboard history, and configurable company API testing is a Docker-based Hugging Face Space using synthetic data only.
+See [the hardening roadmap](docs/NEXT_STAGES.md), [company staging API configuration](docs/COMPANY_API_ADAPTER.md), [staging/upload workflow](docs/API_STAGING.md), [the two deployment modes](docs/DEPLOYMENT_MODES.md), the [AWS private-pilot plan](docs/AWS_PRIVATE_PILOT.md), and the [personal AWS synthetic smoke test](docs/AWS_SYNTHETIC_SMOKE_TEST.md). The local dashboard can display AWS task summaries after `python -m app.aws_runs` syncs them from CloudWatch; the dashboard does not connect to AWS itself. The public Hugging Face Space is synthetic-only. The selected private-pilot design runs the session evaluator as a one-shot ECS Fargate task inside the company's AWS network and calls its approved HTTPS staging API. AWS infrastructure for the company pilot is not provisioned yet; this is not a production enterprise dashboard.
+
+## Public interactive demo
+
+This repository includes a Docker Space setup for a public, deterministic demo using synthetic data. It makes no model API calls and does not connect to company systems. Uploads/reports are scoped by a browser session cookie, with a clear-data action and 30-minute idle cleanup. A best-effort detector rejects some credential-shaped uploads; it does not make sensitive uploads safe and it does not guarantee secure erasure. Do not put real customer/company data or credentials in the public Space. For the company-controlled path, run `python3 -m app.session_eval --target company-api` inside the planned private AWS task; by default it writes a summary-only report. The AWS task, networking, and secret integration still need to be implemented and reviewed. See [`docs/AWS_PRIVATE_PILOT.md`](docs/AWS_PRIVATE_PILOT.md), [`docs/DEPLOYMENT_MODES.md`](docs/DEPLOYMENT_MODES.md), and [`docs/SECURITY_AND_ERASURE.md`](docs/SECURITY_AND_ERASURE.md). Do not add a paid model key to an unrestricted public Space.

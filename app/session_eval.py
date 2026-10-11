@@ -199,16 +199,64 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--benchmark',type=Path,default=Path('benchmarks/support_sessions.jsonl'))
     parser.add_argument('--output',type=Path,default=Path('reports/session-demo.json'))
+    parser.add_argument('--target',choices=('local','company-api'),default='local',
+                        help='Run against local fixtures or a configured company staging API')
+    parser.add_argument('--include-content',action='store_true',
+                        help='Save raw inputs/answers in the report. Use only in approved encrypted company storage.')
+    parser.add_argument('--summary-only',action='store_true',
+                        help='Save and print only aggregate metrics and numbered check outcomes; omit prompts, answers, and identifiers.')
     args=parser.parse_args()
     cases=[json.loads(line) for line in args.benchmark.read_text().splitlines() if line.strip()]
-    report=evaluate_sessions(cases,os.getenv('AGENTEVAL_PROVIDER','demo').lower())
+    if args.target=='company-api':
+        if not os.getenv('AGENTEVAL_AUTH_TOKEN'):
+            parser.error('--target company-api requires AGENTEVAL_AUTH_TOKEN injected by an approved secret manager')
+        from app.api_adapter import APISession, staging_target
+        target=staging_target()
+        report=evaluate_sessions(cases,'company-api',session_factory=APISession)
+        report['chatbot_provider']=target['provider']
+        report['chatbot_model']=target.get('model')
+    else:
+        report=evaluate_sessions(cases,os.getenv('AGENTEVAL_PROVIDER','demo').lower())
     args.output.parent.mkdir(parents=True,exist_ok=True)
-    args.output.write_text(json.dumps(report,indent=2)+'\n')
-    print(json.dumps({k:report[k] for k in ['provider','passed','metrics']},indent=2))
-    for row in report['cases']:
-        if not row['success']:
-            print(row['id'],json.dumps(row))
+    summary_only=args.summary_only or (args.target=='company-api' and not args.include_content)
+    saved=_summary_report(report) if summary_only else report
+    args.output.write_text(json.dumps(saved,indent=2)+'\n')
+    # Never print raw prompts, answers, or free-text validation details in
+    # company API mode: stdout commonly ends up in CI logs.
+    if summary_only:
+        print(json.dumps(saved,indent=2))
+    else:
+        print(json.dumps({'provider':report['provider'],'passed':report['passed'],'metrics':report['metrics']},indent=2))
+    if args.target=='local' and not args.summary_only:
+        for row in report['cases']:
+            if not row['success']:
+                print(row['id'],json.dumps(row))
     return 0 if report['passed'] else 1
+
+
+def _summary_report(report):
+    """Drop prompts, responses, identifiers, and free text from CI artifacts."""
+    safe_cases=[]
+    for index,row in enumerate(report.get('cases',[]),1):
+        safe_cases.append({
+            'case_number':index,
+            'success':bool(row.get('success')),
+            'tool_correct':bool(row.get('tool_correct')),
+            'access_correct':bool(row.get('access_correct')),
+            'tool_outcome_correct':bool(row.get('tool_outcome_correct')),
+            'has_policy_violations':bool(row.get('policy_violations')),
+            'has_missing_expectations':bool(row.get('missing_expected')),
+            'has_error':bool(row.get('error')),
+        })
+    metrics=dict(report.get('metrics',{}))
+    metrics.pop('success_by_category',None)
+    return {key:report[key] for key in ('provider','passed') if key in report} | {
+        'metrics':metrics,
+        'chatbot_provider':report.get('chatbot_provider'),
+        'chatbot_model':report.get('chatbot_model'),
+        'cases':safe_cases,
+        'content_included':False,
+    }
 
 if __name__=='__main__':
     raise SystemExit(main())
