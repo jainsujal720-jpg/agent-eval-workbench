@@ -1,14 +1,16 @@
 """Local dashboard for single-request and conversation reports."""
 import argparse
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import html
 import json
+import os
 import re
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 
 REPORT = Path('reports/latest.json')
 SESSION_REPORT = Path('reports/session-latest.json')
+AWS_RUNS_REPORT = Path('reports/aws-runs.json')
 
 
 def safe(value):
@@ -42,12 +44,18 @@ def card(label,value):
 
 
 def render_report(report, sessions=False, filter_mode='all'):
-    nav='<nav><a href="/" class="'+('' if sessions else 'active')+'">Single requests</a><a href="/sessions" class="'+('active' if sessions else '')+'">Conversations</a><a href="/benchmarks">Upload benchmarks</a><a href="/benchmark-history">Run history</a></nav>'
+    nav='<nav><a href="/" class="'+('' if sessions else 'active')+'">Single requests</a><a href="/sessions" class="'+('active' if sessions else '')+'">Conversations</a><a href="/aws-runs">AWS runs</a><a href="/benchmarks">Upload benchmarks</a><a href="/benchmark-history">Run history</a></nav>'
+    if os.getenv('AGENTEVAL_SPACE_DEMO') == '1':
+        nav=nav.replace('<a href="/aws-runs">AWS runs</a>','')
+        nav=nav.replace('</nav>','<button class="button" onclick="clearDemoData()">Clear my data</button></nav>')
     title='Conversation evaluation' if sessions else 'Single-request evaluation'
     body='<h1>AgentEval Workbench</h1>'+nav+f'<h2>{title}</h2>'
     if report is None:
-        filename='reports/session-latest.json' if sessions else 'reports/latest.json'
-        body+=f'<div class="card">No report available. Save a report to <strong>{filename}</strong>, then refresh.</div>'
+        if os.getenv('AGENTEVAL_SPACE_DEMO') == '1':
+            body+='<div class="card">No report in this browser session yet. Upload the sample benchmark and run an evaluation to create one.</div>'
+        else:
+            filename='reports/session-latest.json' if sessions else 'reports/latest.json'
+            body+=f'<div class="card">No report available. Save a report to <strong>{filename}</strong>, then refresh.</div>'
     else:
         metrics=report.get('metrics',{});cases=report.get('cases',[])
         body+=f'<p>Provider: <strong>{safe(report.get("provider","unknown"))}</strong> &nbsp; Overall gate: {badge(bool(report.get("passed")))}</p>'
@@ -91,27 +99,106 @@ def render_report(report, sessions=False, filter_mode='all'):
             body+='</tbody></table></div>'
         download='/session-report.json' if sessions else '/report.json'
         body+=f'<p><a href="{download}">Download raw report (JSON)</a></p>'
-    body+='<p class="note">Local report viewer. Refresh after replacing a report. Opening this page does not run tests or call a model API.</p>'
+    note='Uploads and reports are scoped to this browser cookie. The app removes its visible files after 30 minutes of inactivity; this does not authenticate you or guarantee secure erasure from hosting infrastructure.' if os.getenv('AGENTEVAL_SPACE_DEMO') == '1' else 'Local report viewer. Refresh after replacing a report. Opening this page does not run tests or call a model API.'
+    body+='<p class="note">'+safe(note)+'</p>'
+    if os.getenv('AGENTEVAL_SPACE_DEMO') == '1':
+        body+='<script>async function clearDemoData(){if(!confirm("Remove your upload and report files from this app now? This cannot erase provider backups or infrastructure copies."))return;const r=await fetch("/privacy/clear",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});if(r.ok)location.href="/benchmarks";else alert((await r.json()).error||"Could not clear app files")}</script>'
     return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentEval Workbench</title><style>'+STYLE+'</style></head><body><main>'+body+'</main></body></html>'
 
 
+def render_aws_runs(report):
+    nav='<nav><a href="/">Single requests</a><a href="/sessions">Conversations</a><a href="/aws-runs" class="active">AWS runs</a><a href="/benchmarks">Upload benchmarks</a><a href="/benchmark-history">Run history</a></nav>'
+    body='<h1>AgentEval Workbench</h1>'+nav+'<h2>AWS synthetic runs</h2>'
+    body+='<p class="note">This page reads summary-only results synced from your AWS CloudWatch log group into a local file. It does not call AWS or run evaluations when opened. Guard interventions are protective checks and do not automatically mean a test failed.</p>'
+    if report is None:
+        body+='<div class="card">No AWS run summaries are saved yet. From Terminal, run <code>python3 -m app.aws_runs --region ap-south-1</code>, then refresh this page.</div>'
+    else:
+        runs=report.get('runs',[])
+        body+=f'<p>Region: <strong>{safe(report.get("region","unknown"))}</strong> · Log group: <strong>{safe(report.get("log_group","unknown"))}</strong></p>'
+        body+=f'<p class="muted">Last synced: {safe(report.get("synced_at","unknown"))}</p>'
+        if not runs:
+            body+='<div class="card">No task log streams were found. Check that the stack still exists and that the AWS test task has run.</div>'
+        else:
+            body+='<div class="table-wrap"><table><thead><tr><th>Run</th><th>Last log event (UTC)</th><th>Result</th><th>Sessions</th><th>Turns</th><th>Failed turns</th><th>Access failures</th><th>Errors</th><th>Handled tool failures</th><th>Guard interventions</th><th>Case checks</th></tr></thead><tbody>'
+            for run in runs:
+                metrics=run.get('metrics',{})
+                if not run.get('summary_available'):
+                    body+='<tr>'+f'<td>{safe(run.get("run_id","unknown"))}</td><td>{safe(run.get("last_event_utc","unknown"))}</td><td colspan="9">Summary could not be read from this stream</td></tr>'
+                    continue
+                body+='<tr>'+f'<td>{safe(run.get("run_id","unknown"))}</td><td>{safe(run.get("last_event_utc","unknown"))}</td><td>{badge(bool(run.get("passed")))}</td>'
+                for key in ('session_count','turn_count','failed_turn_count','access_check_failure_count','error_count','handled_tool_failure_count','guard_intervention_count'):
+                    body+=f'<td>{safe(metrics.get(key,"Not recorded"))}</td>'
+                case_results=run.get('cases',[])
+                if case_results:
+                    case_details='<details><summary>'+safe(len(case_results))+' numbered cases</summary><ul>'
+                    for item in case_results:
+                        number=item.get('case_number','?')
+                        check_names=(('tool_correct','route',True),('access_correct','access',True),
+                                     ('tool_outcome_correct','tool outcome',True),
+                                     ('has_policy_violations','policy',False),('has_missing_expectations','expectations',False),
+                                     ('has_error','agent error',False))
+                        checks_text=', '.join(label+': '+('issue' if bool(item.get(key)) != success_when_true else 'ok')
+                                              for key,label,success_when_true in check_names if key in item)
+                        case_details+='<li>Case '+safe(number)+': '+badge(bool(item.get('success')))+' '+safe(checks_text)+'</li>'
+                    case_details+='</ul></details>'
+                else:
+                    case_details='Case checks unavailable in this saved run'
+                body+='<td>'+case_details+'</td>'
+                body+='</tr>'
+            body+='</tbody></table></div>'
+    body+='<p class="note">The local summary file contains aggregate metrics only—no prompts, answers, customer identifiers, or credentials. Stack deletion removes the CloudWatch source logs; this local copy remains until you remove <code>reports/aws-runs.json</code>.</p>'
+    return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>AgentEval AWS runs</title><style>'+STYLE+'</style></head><body><main>'+body+'</main></body></html>'
+
+
 class Handler(BaseHTTPRequestHandler):
+    def _init_visitor(self):
+        self.visitor_id=None
+        self.set_visitor_cookie=False
+        if os.getenv('AGENTEVAL_SPACE_DEMO') == '1':
+            from app.visitor_data import get_visitor
+            self.visitor_id,_=get_visitor(self.headers.get('Cookie'))
+            self.set_visitor_cookie=True
+
+    def end_headers(self):
+        # Reports and uploaded benchmark previews can contain customer test data.
+        # Avoid browser/proxy caching; hosting-layer logs and backups still need
+        # separate controls documented for any private deployment.
+        if not any(line.lower().startswith(b'cache-control:') for line in self._headers_buffer):
+            self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('Referrer-Policy', 'no-referrer')
+        self.send_header('X-Frame-Options', 'DENY')
+        if getattr(self,'set_visitor_cookie',False):
+            forwarded=self.headers.get('X-Forwarded-Proto','').split(',')[0].strip().lower()
+            secure='; Secure' if forwarded == 'https' else ''
+            from app.visitor_data import COOKIE_NAME,SESSION_TTL_SECONDS
+            self.send_header('Set-Cookie',f'{COOKIE_NAME}={self.visitor_id}; Path=/; Max-Age={SESSION_TTL_SECONDS}; HttpOnly; SameSite=Strict{secure}')
+        super().end_headers()
+
     def do_POST(self):
+        self._init_visitor()
         from app.benchmark_upload import upload, enqueue
+        from app.visitor_data import clear_visitor
         if self.headers.get('Content-Type','').split(';')[0] != 'application/json':
             self.send_error(415); return
         origin=self.headers.get('Origin')
-        expected='http://'+self.headers.get('Host','')
-        if origin and origin != expected:
+        host=self.headers.get('Host','')
+        expected={f'http://{host}',f'https://{host}'}
+        if origin and origin not in expected:
             self.send_error(403); return
         code=200
         try:
             size=int(self.headers.get('Content-Length','0'))
             if not 0 < size <= 524288: raise ValueError('Invalid upload size')
             data=json.loads(self.rfile.read(size))
-            if self.path == '/benchmarks/upload': result=upload(data['text'])
+            if self.path == '/privacy/clear':
+                if self.visitor_id is None: raise ValueError('Data clearing is available in the hosted demo')
+                if not clear_visitor(self.visitor_id):
+                    result={'error':'App files were not cleared. Finish any running evaluation and retry; if it keeps failing, contact the deployment administrator.'};code=409
+                else: result={'cleared':True,'scope':'application upload and report files'}
+            elif self.path == '/benchmarks/upload': result=upload(data['text'],owner=self.visitor_id)
             elif self.path == '/benchmarks/run':
-                result={'job_id':enqueue(data['upload_id'])}; code=202
+                result={'job_id':enqueue(data['upload_id'],owner=self.visitor_id)}; code=202
             else: self.send_error(404); return
         except (ValueError,KeyError,TypeError,OSError) as exc:
             result={'error': str(exc) if isinstance(exc,ValueError) else 'Could not process benchmark request'};code=400
@@ -119,14 +206,23 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type','application/json')
         self.end_headers(); self.wfile.write(json.dumps(result).encode())
     def do_GET(self):
+        self._init_visitor()
         parsed=urlsplit(self.path)
+        if parsed.path == '/' and os.getenv('AGENTEVAL_SPACE_DEMO') == '1':
+            self.send_response(302); self.send_header('Location','/benchmarks'); self.end_headers(); return
+        if parsed.path == '/sample-benchmark' and os.getenv('AGENTEVAL_SPACE_DEMO') == '1':
+            sample=Path('benchmarks/support_sessions.jsonl')
+            if not sample.is_file(): self.send_error(404); return
+            self.send_response(200); self.send_header('Content-Type','application/x-ndjson; charset=utf-8')
+            self.send_header('Content-Disposition','attachment; filename="support_sessions.jsonl"')
+            self.end_headers(); self.wfile.write(sample.read_bytes()); return
         if parsed.path == '/benchmarks':
             from app.benchmark_upload import PAGE
             self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8')
             self.end_headers(); self.wfile.write(PAGE.encode()); return
         from app.benchmark_upload import job_status
         if parsed.path.startswith('/benchmarks/jobs/'):
-            job=job_status(parsed.path.rsplit('/',1)[-1])
+            job=job_status(parsed.path.rsplit('/',1)[-1],owner=self.visitor_id)
             if not job: self.send_error(404); return
             self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Cache-Control','no-store')
             self.end_headers(); self.wfile.write(json.dumps(job).encode()); return
@@ -134,8 +230,27 @@ class Handler(BaseHTTPRequestHandler):
             from app.benchmark_upload import HISTORY_PAGE
             self.send_response(200); self.send_header('Content-Type','text/html; charset=utf-8'); self.send_header('Cache-Control','no-store')
             self.end_headers(); self.wfile.write(HISTORY_PAGE.encode()); return
+        if parsed.path in {'/aws-runs','/aws-runs.json'}:
+            # AWS summaries are intended for the private local dashboard only.
+            if self.visitor_id is not None:
+                self.send_error(404); return
+            try:
+                report=json.loads(AWS_RUNS_REPORT.read_text()) if AWS_RUNS_REPORT.exists() else None
+                if report is not None and (not isinstance(report,dict) or not isinstance(report.get('runs'),list)):
+                    raise ValueError('Invalid AWS run summary structure')
+            except (OSError,ValueError):
+                self.send_error(500,'Could not read valid AWS run summaries'); return
+            raw=parsed.path.endswith('.json')
+            if raw and report is None:
+                self.send_error(404,'No AWS run summaries available'); return
+            data=(json.dumps(report,indent=2)+'\n') if raw else render_aws_runs(report)
+            self.send_response(200)
+            self.send_header('Content-Type','application/json; charset=utf-8' if raw else 'text/html; charset=utf-8')
+            self.send_header('Cache-Control','no-store')
+            self.end_headers(); self.wfile.write(data.encode()); return
         if parsed.path == '/benchmarks/history.json':
-            reports=Path('reports'); rows=[]
+            from app.visitor_data import report_directory
+            reports=report_directory(self.visitor_id) if self.visitor_id else Path('reports'); rows=[]
             for candidate in sorted(reports.glob('staging-*.json'),key=lambda f:f.stat().st_mtime,reverse=True)[:100]:
                 try:
                     item=json.loads(candidate.read_text())
@@ -146,22 +261,34 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path.startswith('/reports/'):
             name=parsed.path.removeprefix('/reports/')
             if not re.fullmatch(r'staging-[a-f0-9]+\.json',name): self.send_error(404); return
-            target=Path('reports')/name
+            from app.visitor_data import report_path
+            target=report_path(name,owner=self.visitor_id) if self.visitor_id else Path('reports')/name
+            if target is None: self.send_error(404); return
             if not target.is_file(): self.send_error(404); return
             self.send_response(200); self.send_header('Content-Type','application/json; charset=utf-8'); self.send_header('Content-Disposition','attachment; filename="'+name+'"')
             self.end_headers(); self.wfile.write(target.read_bytes()); return
         sessions=parsed.path in {'/sessions','/session-report.json'}
         if parsed.path not in {'/','/sessions','/report.json','/session-report.json'}:
             self.send_error(404);return
+        if self.visitor_id and not sessions:
+            self.send_error(404,'Single-request reports are not used in the public demo');return
         path=SESSION_REPORT if sessions else REPORT
+        if sessions and self.visitor_id:
+            from app.visitor_data import report_path
+            path=report_path(owner=self.visitor_id)
         report_name=parse_qs(parsed.query).get('report',[''])[0]
         if sessions and report_name:
             if not re.fullmatch(r'staging-[a-f0-9]+\.json',report_name):
                 self.send_error(400,'Invalid report name'); return
-            path=Path('reports')/report_name
+            if self.visitor_id:
+                from app.visitor_data import report_path
+                path=report_path(report_name,owner=self.visitor_id)
+                if path is None: self.send_error(404); return
+            else:
+                path=Path('reports')/report_name
         raw=parsed.path.endswith('.json')
         try:
-            report=json.loads(path.read_text()) if path.exists() else None
+            report=json.loads(path.read_text()) if path is not None and path.exists() else None
             if report is not None and (not isinstance(report,dict) or not isinstance(report.get('metrics'),dict) or not isinstance(report.get('cases'),list)):
                 raise ValueError('Invalid report structure')
             if report is not None and (('session_count' in report['metrics']) != sessions):
@@ -179,12 +306,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers();self.wfile.write(data.encode())
 
 
-def serve():
+def serve(host=None,port=None):
     parser=argparse.ArgumentParser()
-    parser.add_argument('--port',type=int,default=8000)
+    parser.add_argument('--host',default=host or '127.0.0.1')
+    parser.add_argument('--port',type=int,default=port or 8000)
     args=parser.parse_args()
-    with HTTPServer(('127.0.0.1',args.port),Handler) as server:
-        print(f'AgentEval dashboard running at http://127.0.0.1:{args.port}')
+    with ThreadingHTTPServer((args.host,args.port),Handler) as server:
+        print(f'AgentEval dashboard running at http://{args.host}:{args.port}')
         print('Press Control-C to stop the server.')
         try:server.serve_forever()
         except KeyboardInterrupt:print('\nDashboard stopped.')
