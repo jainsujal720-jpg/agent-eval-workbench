@@ -34,3 +34,30 @@ jobs:
           name: agent-evaluation-reports
           path: reports/ci-*.json
           if-no-files-found: ignore
+
+  docker-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the synthetic demo image
+        run: docker build --tag agenteval-space:ci .
+      - name: Start the container and check the demo pages
+        run: |
+          docker run --detach --rm --name agenteval-space-ci \
+            --publish 127.0.0.1:7860:7860 agenteval-space:ci
+          trap 'docker stop agenteval-space-ci >/dev/null 2>&1 || true' EXIT
+
+          ready=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:7860/benchmarks \
+              --output /tmp/agenteval-benchmarks.html; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
+          grep --quiet 'Validate and preview' /tmp/agenteval-benchmarks.html
+          curl --fail --silent http://127.0.0.1:7860/sample-benchmark \
+            --output /tmp/agenteval-sample.jsonl
+          test -s /tmp/agenteval-sample.jsonl

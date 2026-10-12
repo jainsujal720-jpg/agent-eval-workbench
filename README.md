@@ -1,12 +1,3 @@
----
-title: AgentEval Workbench
-emoji: 🧪
-colorFrom: blue
-colorTo: indigo
-sdk: docker
-app_port: 7860
----
-
 # AgentEval Workbench
 
 A small, portfolio-ready benchmark and CI/CD demo for evaluating AI agent changes before release. The synthetic business is ShopCo, an online retailer with order status, returns, and refund-review support.
@@ -67,13 +58,56 @@ python3 -m app.dashboard
 
 Then visit `http://127.0.0.1:8000`.
 
+The dashboard is a report viewer: opening or refreshing it does not run an evaluation. A one-message report is written to `reports/latest.json`; a multi-turn conversation report is written to `reports/session-latest.json`. A case is one message, while a conversation contains several turns.
+
+If port 8000 is already in use, stop the older dashboard with Control-C in its Terminal tab, or start this one on another port:
+
+```bash
+python3 -m app.dashboard --port 8001
+```
+
+## Interactive local upload workflow
+
+To upload a conversation benchmark, review its expected behavior, run it against the synthetic staging chatbot, and view the report, open two Terminal tabs in the project folder.
+
+Terminal tab 1:
+
+```bash
+python3 -m app.staging_api --provider demo
+```
+
+Terminal tab 2:
+
+```bash
+python3 -m app.dashboard --port 8001
+```
+
+Open `http://127.0.0.1:8001/benchmarks`, choose a conversation JSON or JSONL file, select **Validate and preview**, review the cases, then select **Run evaluation**. Use **Multi-turn conversations** to inspect results and **Run history** to reopen saved reports. This local workflow uses synthetic Alice/Bob fixtures and makes no model API calls. If port 8010 is occupied, stop the old staging service with Control-C before starting another one.
+
+For the single-message benchmark, run the evaluator command first, then refresh the dashboard:
+
+```bash
+AGENTEVAL_PROVIDER=demo python3 -m app.evaluate --benchmark benchmarks/support.jsonl --output reports/latest.json
+```
+
+## Local Docker demo
+
+The interactive synthetic demo also runs locally in Docker; Hugging Face hosting is optional and is not required. From the project folder:
+
+```bash
+docker build -t agenteval-space .
+docker run --rm -p 7861:7860 agenteval-space
+```
+
+Open `http://127.0.0.1:7861`. Using host port 7861 avoids a conflict if another app already uses 7860. Press Control-C in that Terminal tab to stop the container. This demo pins the chatbot to deterministic synthetic fixtures; it does not call OpenAI or company systems.
+
 ## Change the benchmark
 
 Each JSONL row contains an `id`, `category`, `input`, `expected_contains` list, `expected_tool` (or `null`), and `must_not_contain` list. Add cases for important user intents and known failures. The synthetic order database contains no real customer data and all simulated operations are read-only.
 
 ## CI/CD behavior
 
-`.github/workflows/agent-evaluation.yml` runs unit tests, release, conversation authorization, and tool-failure benchmarks, then uploads reports. Pull requests receive a pass/fail check. The stress benchmark is retained as a known baseline and its expected demo-agent failures do not fail the release gate.
+`.github/workflows/agent-evaluation.yml` runs unit tests, release, conversation authorization, and tool-failure benchmarks, then uploads reports. A separate CI job builds the local synthetic Docker image, starts it, and checks that its benchmark page and sample download respond. Pull requests receive pass/fail checks for both the evaluation suite and container smoke test. The stress benchmark is retained as a known baseline and its expected demo-agent failures do not fail the release gate. CI uses synthetic data and does not call OpenAI or AWS.
 
 ## Product metrics in this prototype
 
@@ -91,8 +125,8 @@ See [`docs/PROJECT_BRIEF.md`](docs/PROJECT_BRIEF.md) for product framing, API be
 
 ## Workbench improvements and deployment roadmap
 
-See [the hardening roadmap](docs/NEXT_STAGES.md), [company staging API configuration](docs/COMPANY_API_ADAPTER.md), [staging/upload workflow](docs/API_STAGING.md), [the two deployment modes](docs/DEPLOYMENT_MODES.md), the [AWS private-pilot plan](docs/AWS_PRIVATE_PILOT.md), and the [personal AWS synthetic smoke test](docs/AWS_SYNTHETIC_SMOKE_TEST.md). The local dashboard can display AWS task summaries after `python -m app.aws_runs` syncs them from CloudWatch; the dashboard does not connect to AWS itself. The public Hugging Face Space is synthetic-only. The selected private-pilot design runs the session evaluator as a one-shot ECS Fargate task inside the company's AWS network and calls its approved HTTPS staging API. AWS infrastructure for the company pilot is not provisioned yet; this is not a production enterprise dashboard.
+See [the hardening roadmap](docs/NEXT_STAGES.md), [company staging API configuration](docs/COMPANY_API_ADAPTER.md), [staging/upload workflow](docs/API_STAGING.md), [deployment modes](docs/DEPLOYMENT_MODES.md), the [AWS private-pilot plan](docs/AWS_PRIVATE_PILOT.md), and the [personal AWS synthetic smoke test](docs/AWS_SYNTHETIC_SMOKE_TEST.md). The local dashboard can display AWS task summaries after `python3 -m app.aws_runs` syncs them from CloudWatch; the dashboard does not connect to AWS itself. The AWS private-pilot infrastructure for a company is not provisioned; this is not a production enterprise dashboard.
 
-## Public interactive demo
+## Demo and data boundaries
 
-This repository includes a Docker Space setup for a public, deterministic demo using synthetic data. It makes no model API calls and does not connect to company systems. Uploads/reports are scoped by a browser session cookie, with a clear-data action and 30-minute idle cleanup. A best-effort detector rejects some credential-shaped uploads; it does not make sensitive uploads safe and it does not guarantee secure erasure. Do not put real customer/company data or credentials in the public Space. For the company-controlled path, run `python3 -m app.session_eval --target company-api` inside the planned private AWS task; by default it writes a summary-only report. The AWS task, networking, and secret integration still need to be implemented and reviewed. See [`docs/AWS_PRIVATE_PILOT.md`](docs/AWS_PRIVATE_PILOT.md), [`docs/DEPLOYMENT_MODES.md`](docs/DEPLOYMENT_MODES.md), and [`docs/SECURITY_AND_ERASURE.md`](docs/SECURITY_AND_ERASURE.md). Do not add a paid model key to an unrestricted public Space.
+The Docker demo above is local and synthetic-only. It has not been deployed as a Hugging Face Space; the account's Space setup page currently requires a paid plan to select Docker or Gradio. No subscription is needed for local Docker use. Treat any public hosted demo as synthetic/public-data only: upload checks are best-effort, and browser scoping or clear-data controls do not guarantee secure erasure. Do not upload real customer/company data or credentials. The company-controlled path requires an approved private environment, staging API, secret injection, report storage, and security review before any real company data is considered. See [`docs/AWS_PRIVATE_PILOT.md`](docs/AWS_PRIVATE_PILOT.md), [`docs/DEPLOYMENT_MODES.md`](docs/DEPLOYMENT_MODES.md), and [`docs/SECURITY_AND_ERASURE.md`](docs/SECURITY_AND_ERASURE.md). Do not add a paid model key to an unrestricted public demo.
