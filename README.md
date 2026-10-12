@@ -12,7 +12,7 @@ Teams can inspect agent runs, but need a repeatable way to tell whether a change
 - Synthetic single-turn, multi-turn, authorization, tool-failure, and stress benchmarks for support scenarios.
 - A runner that reports task success, policy pass rate, route correctness, latency, access behavior, and estimated cost.
 - Threshold-based release gating and machine-readable JSON output.
-- Unit tests and GitHub Actions gates for release, authorization, and tool-failure behavior on pushes and pull requests.
+- Unit tests and GitHub Actions gates for release, authorization, tool-failure, and stress behavior on pushes and pull requests.
 - Optional OpenAI-compatible model API adapter, disabled unless explicitly configured.
 - Benchmark upload, background evaluation jobs, report history, and a browser dashboard.
 
@@ -107,7 +107,7 @@ Each JSONL row contains an `id`, `category`, `input`, `expected_contains` list, 
 
 ## CI/CD behavior
 
-`.github/workflows/agent-evaluation.yml` runs unit tests, release, conversation authorization, and tool-failure benchmarks, then uploads reports. A separate CI job builds the local synthetic Docker image, starts it, and checks that its benchmark page and sample download respond. Pull requests receive pass/fail checks for both the evaluation suite and container smoke test. The stress benchmark is retained as a known baseline and its expected demo-agent failures do not fail the release gate. CI uses synthetic data and does not call OpenAI or AWS.
+`.github/workflows/agent-evaluation.yml` runs unit tests, release, conversation authorization, tool-failure, and stress benchmarks, then uploads reports. The stress benchmark is blocking: it must meet the evaluator's release thresholds and not regress from the recorded baseline. Any failed gate makes the workflow fail. A separate CI job builds the local synthetic Docker image, starts it, and checks that its benchmark page and sample download respond. CI uses synthetic data and does not call OpenAI or AWS. To block merges in GitHub, configure branch protection for `main` to require both `evaluate-agent` and `docker-smoke` checks; a failed workflow alone does not prevent a direct push to `main`.
 
 ## Product metrics in this prototype
 

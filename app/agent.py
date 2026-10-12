@@ -1,8 +1,10 @@
 """Synthetic commerce support agent and provider adapter."""
 
 from dataclasses import dataclass
+from difflib import get_close_matches
 import json
 import os
+import re
 
 
 ORDERS = {
@@ -20,20 +22,37 @@ class AgentResult:
 
 
 def run_demo_agent(user_input: str) -> AgentResult:
-    """Deterministic baseline with simulated, read-only order data."""
+    """Deterministic synthetic support agent used for local and CI evaluation."""
     text = user_input.lower()
-    order_id = next(
-        (candidate for candidate in ORDERS if candidate.lower() in text),
-        None,
-    )
+    words = re.findall(r"[a-z]+", text)
+    supplied_ids = [value.upper() for value in re.findall(r"\bA-\d+\b", user_input, re.I)]
 
-    if "password" in text or "locked" in text or "account hacked" in text:
+    # Security support always takes precedence over an order lookup.
+    security_terms = (
+        "password", "locked", "hacked", "taken over", "compromised",
+        "account takeover", "someone accessed my account",
+    )
+    if any(term in text for term in security_terms):
         return AgentResult(
             "For your account security, I’m handing this to a human support specialist. "
             "Please do not share your password or verification code.",
             "human_handoff",
         )
 
+    correction = any(term in text for term in (
+        "sorry, i meant", "i meant", "correction:", "rather, order",
+    ))
+    if correction and supplied_ids:
+        order_id = supplied_ids[-1]
+    elif len(set(supplied_ids)) > 1:
+        return AgentResult(
+            "Which order would you like me to check? Please share one order ID.",
+            "ask_order_id",
+        )
+    else:
+        order_id = supplied_ids[-1] if supplied_ids else None
+
+    # This demo asks for an order ID before answering any return-policy question.
     if "return policy" in text or "returns policy" in text:
         return AgentResult(
             "Our return process depends on your order. Please share your order ID so I can "
@@ -41,46 +60,52 @@ def run_demo_agent(user_input: str) -> AgentResult:
             "ask_order_id",
         )
 
-    if "refund" in text or "return" in text:
+    refund_terms = ("refund", "refunds", "return", "returns")
+    refund_intent = any(
+        word in refund_terms or get_close_matches(word, refund_terms, n=1, cutoff=0.82)
+        for word in words
+    ) or "money back" in text or "purchase back" in text
+
+    if refund_intent:
         if not order_id:
             return AgentResult(
                 "Please share your order ID so I can check the order and explain the refund "
                 "review process. I cannot approve a refund.",
                 "ask_order_id",
             )
-
-        order = ORDERS[order_id]
-        if order["eligible_for_refund_review"]:
+        order = ORDERS.get(order_id)
+        if order is None:
             return AgentResult(
-                f"Order {order_id} is {order['status']}. I can submit it for refund review; "
-                "this does not mean a refund is approved. Reviews take up to 5 business days.",
+                f"I couldn't find order {order_id}. Please check the order ID and try again.",
                 "order_lookup",
             )
-
+        if order["eligible_for_refund_review"]:
+            return AgentResult(
+                f"Order {order_id} is {order['status']} and eligible for refund review. "
+                "A refund review does not mean a refund is approved.",
+                "order_lookup",
+            )
         return AgentResult(
-            f"Order {order_id} is {order['status']}, so it is not currently eligible for "
-            "refund review. I have not submitted or approved a refund.",
+            f"Order {order_id} is {order['status']} and is not currently eligible for "
+            "refund review. A refund was not submitted or approved.",
             "order_lookup",
         )
 
-    if "where" in text and "order" in text:
-        if order_id:
+    status_intent = any(term in text for term in (
+        "where", "status", "delivery", "shipped", "delivered",
+    ))
+    if order_id and (status_intent or "order" in text):
+        order = ORDERS.get(order_id)
+        if order is None:
             return AgentResult(
-                f"Order {order_id} is {ORDERS[order_id]['status']}.",
+                f"I couldn't find order {order_id}. Please check the order ID and try again.",
                 "order_lookup",
             )
+        return AgentResult(f"Order {order_id} is {order['status']}.", "order_lookup")
 
-        if any(
-            token.startswith("a-")
-            for token in text.replace("?", " ").replace(".", " ").split()
-        ):
-            return AgentResult(
-                "I can only look up known orders. Please provide a valid order ID.",
-                "ask_order_id",
-            )
-
+    if status_intent or "order" in text or "purchase" in text:
         return AgentResult(
-            "Please share your order ID and I can check its status.",
+            "Please share your order ID and I can check it for you.",
             "ask_order_id",
         )
 
@@ -88,7 +113,6 @@ def run_demo_agent(user_input: str) -> AgentResult:
         "I can help with order status, returns, and refund review. What would you like help with?",
         None,
     )
-
 
 def run_openai_agent(user_input: str) -> AgentResult:
     """Use function calling with simulated support tools and fixed final wording."""

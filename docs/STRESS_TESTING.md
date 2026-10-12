@@ -31,8 +31,13 @@ not complete semantic or security evaluation.
 4. Review each failure: is the expectation correct, or is agent behavior wrong?
 5. Improve the agent, rerun the SAME suite, and compare individual cases.
 6. Repeat live evaluations using separate files to detect variation. They cost API usage.
-7. Keep regression and stress results separate. Do not add a failing stress suite
-   to required CI until the failures are addressed and the contract is approved.
+7. CI runs the deterministic demo stress suite as a blocking gate. It must meet
+   the evaluator's release thresholds and have no critical failures. A second
+   gate compares task success, policy, tool correctness, error/critical counts,
+   category scores, and previously passing cases with `docs/STRESS_BASELINE.json`.
+   Any failure or regression blocks the workflow. The baseline is a historical
+   failing snapshot, so merely matching it cannot pass; the candidate must pass
+   the absolute release gate too.
 
 Demo baseline measured here: 8/20 successful, 6 critical failures. These are
 local deterministic results; no live API run was performed in this workspace.

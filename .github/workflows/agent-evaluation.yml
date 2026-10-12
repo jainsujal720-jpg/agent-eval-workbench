@@ -23,10 +23,10 @@ jobs:
         run: AGENTEVAL_PROVIDER=demo python -m app.session_eval --benchmark benchmarks/support_sessions.jsonl --output reports/ci-sessions.json
       - name: Run tool failure benchmark
         run: AGENTEVAL_PROVIDER=demo python -m app.session_eval --benchmark benchmarks/support_failures.jsonl --output reports/ci-failures.json
-      - name: Record stress benchmark baseline (known demo-agent failures)
-        if: always()
-        continue-on-error: true
-        run: AGENTEVAL_PROVIDER=demo python -m app.evaluate --benchmark benchmarks/support_stress.jsonl --output reports/ci-stress-baseline.json
+      - name: Run stress benchmark release gate
+        run: AGENTEVAL_PROVIDER=demo python -m app.evaluate --benchmark benchmarks/support_stress.jsonl --output reports/ci-stress.json
+      - name: Reject stress benchmark regressions
+        run: python -m app.baseline_gate --candidate reports/ci-stress.json --baseline docs/STRESS_BASELINE.json
       - name: Upload evaluation reports
         if: always()
         uses: actions/upload-artifact@v6
@@ -36,6 +36,7 @@ jobs:
           if-no-files-found: ignore
 
   docker-smoke:
+    needs: evaluate-agent
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
