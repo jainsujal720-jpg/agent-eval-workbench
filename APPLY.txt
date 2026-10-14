@@ -1,0 +1,17 @@
+AgentEval demo-agent stress fixes
+
+From the AgentEval repository root, unzip this archive with overwrite:
+  unzip -o ~/Downloads/AgentEval-demo-stress-fix.zip -d .
+
+Run the full deterministic test suite:
+  AGENTEVAL_PROVIDER=demo python3 -m unittest discover -s tests -v
+
+Run the stress benchmark:
+  AGENTEVAL_PROVIDER=demo python3 -m app.evaluate --benchmark benchmarks/support_stress.jsonl --output reports/stress-current.json
+
+Expected: 20 cases pass, with zero critical failures. The stress suite is now also a unit test, so future changes that break it fail the test suite.
+
+If the strict CI-gate update is present, verify its baseline comparison:
+  python3 -m app.baseline_gate --candidate reports/stress-current.json --baseline docs/STRESS_BASELINE.json
+
+Review git status, then commit and push the strict gate and this agent fix together. Do not update the historical baseline to hide regressions.

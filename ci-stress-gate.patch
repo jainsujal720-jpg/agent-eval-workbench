@@ -1,0 +1,69 @@
+diff --git a/.github/workflows/agent-evaluation.yml b/.github/workflows/agent-evaluation.yml
+index 292c861..e7a1497 100644
+--- a/.github/workflows/agent-evaluation.yml
++++ b/.github/workflows/agent-evaluation.yml
+@@ -23,10 +23,10 @@ jobs:
+         run: AGENTEVAL_PROVIDER=demo python -m app.session_eval --benchmark benchmarks/support_sessions.jsonl --output reports/ci-sessions.json
+       - name: Run tool failure benchmark
+         run: AGENTEVAL_PROVIDER=demo python -m app.session_eval --benchmark benchmarks/support_failures.jsonl --output reports/ci-failures.json
+-      - name: Record stress benchmark baseline (known demo-agent failures)
+-        if: always()
+-        continue-on-error: true
+-        run: AGENTEVAL_PROVIDER=demo python -m app.evaluate --benchmark benchmarks/support_stress.jsonl --output reports/ci-stress-baseline.json
++      - name: Run stress benchmark release gate
++        run: AGENTEVAL_PROVIDER=demo python -m app.evaluate --benchmark benchmarks/support_stress.jsonl --output reports/ci-stress.json
++      - name: Reject stress benchmark regressions
++        run: python -m app.baseline_gate --candidate reports/ci-stress.json --baseline docs/STRESS_BASELINE.json
+       - name: Upload evaluation reports
+         if: always()
+         uses: actions/upload-artifact@v6
+@@ -36,6 +36,7 @@ jobs:
+           if-no-files-found: ignore
+ 
+   docker-smoke:
++    needs: evaluate-agent
+     runs-on: ubuntu-24.04
+     steps:
+       - uses: actions/checkout@v7
+diff --git a/README.md b/README.md
+index 32b14e9..d84fe96 100644
+--- a/README.md
++++ b/README.md
+@@ -12,7 +12,7 @@ Teams can inspect agent runs, but need a repeatable way to tell whether a change
+ - Synthetic single-turn, multi-turn, authorization, tool-failure, and stress benchmarks for support scenarios.
+ - A runner that reports task success, policy pass rate, route correctness, latency, access behavior, and estimated cost.
+ - Threshold-based release gating and machine-readable JSON output.
+-- Unit tests and GitHub Actions gates for release, authorization, and tool-failure behavior on pushes and pull requests.
++- Unit tests and GitHub Actions gates for release, authorization, tool-failure, and stress behavior on pushes and pull requests.
+ - Optional OpenAI-compatible model API adapter, disabled unless explicitly configured.
+ - Benchmark upload, background evaluation jobs, report history, and a browser dashboard.
+ 
+@@ -107,7 +107,7 @@ Each JSONL row contains an `id`, `category`, `input`, `expected_contains` list,
+ 
+ ## CI/CD behavior
+ 
+-`.github/workflows/agent-evaluation.yml` runs unit tests, release, conversation authorization, and tool-failure benchmarks, then uploads reports. A separate CI job builds the local synthetic Docker image, starts it, and checks that its benchmark page and sample download respond. Pull requests receive pass/fail checks for both the evaluation suite and container smoke test. The stress benchmark is retained as a known baseline and its expected demo-agent failures do not fail the release gate. CI uses synthetic data and does not call OpenAI or AWS.
++`.github/workflows/agent-evaluation.yml` runs unit tests, release, conversation authorization, tool-failure, and stress benchmarks, then uploads reports. The stress benchmark is blocking: it must meet the evaluator's release thresholds and not regress from the recorded baseline. Any failed gate makes the workflow fail. A separate CI job builds the local synthetic Docker image, starts it, and checks that its benchmark page and sample download respond. CI uses synthetic data and does not call OpenAI or AWS. To block merges in GitHub, configure branch protection for `main` to require both `evaluate-agent` and `docker-smoke` checks; a failed workflow alone does not prevent a direct push to `main`.
+ 
+ ## Product metrics in this prototype
+ 
+diff --git a/docs/STRESS_TESTING.md b/docs/STRESS_TESTING.md
+index 0274845..d1545aa 100644
+--- a/docs/STRESS_TESTING.md
++++ b/docs/STRESS_TESTING.md
+@@ -31,8 +31,13 @@ not complete semantic or security evaluation.
+ 4. Review each failure: is the expectation correct, or is agent behavior wrong?
+ 5. Improve the agent, rerun the SAME suite, and compare individual cases.
+ 6. Repeat live evaluations using separate files to detect variation. They cost API usage.
+-7. Keep regression and stress results separate. Do not add a failing stress suite
+-   to required CI until the failures are addressed and the contract is approved.
++7. CI runs the deterministic demo stress suite as a blocking gate. It must meet
++   the evaluator's release thresholds and have no critical failures. A second
++   gate compares task success, policy, tool correctness, error/critical counts,
++   category scores, and previously passing cases with `docs/STRESS_BASELINE.json`.
++   Any failure or regression blocks the workflow. The baseline is a historical
++   failing snapshot, so merely matching it cannot pass; the candidate must pass
++   the absolute release gate too.
+ 
+ Demo baseline measured here: 8/20 successful, 6 critical failures. These are
+ local deterministic results; no live API run was performed in this workspace.
