@@ -6,6 +6,12 @@ This is a disposable learning exercise in a personal AWS account. It runs only t
 
 The task runs in one existing default subnet in `ap-south-1`. It receives a public IPv4 address so Fargate can pull the image and send logs, but its dedicated security group has **no inbound rules**. Outbound access is limited to HTTPS and VPC DNS. This is not the private-network company pilot and must never be used with real company or customer data.
 
+## Observed AWS run
+
+The AWS run result reported during this project showed the **session benchmark** profile: 8 conversations and 18 turns. Its summary was `provider: demo`, `passed: true`, with 0 failed turns, 0 access-check failures, 0 errors, 0 handled tool failures, and 4 guard interventions. The Fargate task exited with code 0. All inputs and fixtures were synthetic; this run did not call OpenAI, a company chatbot, or a customer system.
+
+Keep that result separate from the harder tool-failure benchmark described by this guide. The session benchmark has 8 conversations / 18 turns (`benchmarks/support_sessions.jsonl`); the tool-failure benchmark has 16 conversations / 20 turns (`benchmarks/support_failures.jsonl`). A passing result for one suite does not mean the other suite ran or passed. When repeating a run, verify the task definition's `Command` names the intended benchmark before launching the task, then record the report's case counts with its metrics.
+
 ## Resources created by the stack
 
 - Private ECR repository with image scanning, AES-256 encryption, one-image lifecycle, and force-empty deletion.
