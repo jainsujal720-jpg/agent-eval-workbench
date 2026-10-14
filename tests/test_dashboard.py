@@ -36,6 +36,16 @@ class DashboardTests(unittest.TestCase):
     def test_missing_reports_are_explained(self):
         self.assertIn('reports/session-latest.json',dashboard.render_report(None,True))
 
+    def test_dashboard_explains_case_and_conversation_views(self):
+        single=dashboard.render_report(None,False)
+        sessions=dashboard.render_report(None,True)
+        self.assertIn('One-message tests',single)
+        self.assertIn('Multi-turn conversations',single)
+        self.assertIn('Each case tests one customer message',single)
+        self.assertIn('python3 -m app.evaluate',single)
+        self.assertIn('A conversation is one customer session',sessions)
+        self.assertIn('python3 -m app.session_eval',sessions)
+
     def test_http_views_and_download_are_separate(self):
         try:
             probe=socket.socket()

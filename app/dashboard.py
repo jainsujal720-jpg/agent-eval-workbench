@@ -22,7 +22,7 @@ def badge(passed):
 
 
 STYLE = '''
-:root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#f4f7fb;color:#172033;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1450px;margin:auto;padding:30px 24px}h1{margin:0;font-size:30px}h2{font-size:21px}.muted{color:#64748b}nav{display:flex;gap:12px;margin:20px 0}nav a,.button{padding:9px 16px;border:1px solid #d7e0ec;border-radius:9px;background:white;text-decoration:none;color:#2457c5}nav a.active{background:#2457c5;color:white}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px;margin:20px 0}.card,.conversation{background:white;border:1px solid #e2e8f0;border-radius:12px;padding:18px}.value{font-size:26px;font-weight:700}.badge{display:inline-block;border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700}.pass{color:#147d45;background:#e8f7ee}.fail{color:#b42318;background:#fff0ee}.guard{color:#855100;background:#fff4d7}.table-wrap{overflow:auto;background:white;border:1px solid #e2e8f0;border-radius:12px}table{width:100%;border-collapse:collapse;min-width:900px}th,td{text-align:left;vertical-align:top;padding:12px;border-bottom:1px solid #e2e8f0}th{background:#f8fafc}a{color:#2457c5}.conversation{margin:18px 0}summary{cursor:pointer;font-weight:700;font-size:18px}.turn{margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0}.bubble{padding:12px 16px;border-radius:10px;background:#f1f5f9;margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}.reply{background:#eef5ff}.turn-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.detail{padding:10px;background:#f8fafc;border-radius:8px;overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0}label,select{font:inherit}select{padding:7px;border:1px solid #cbd5e1;border-radius:6px}.note{font-size:13px;color:#64748b}@media(max-width:600px){main{padding:20px 12px}h1{font-size:25px}}
+:root{color-scheme:light}*{box-sizing:border-box}body{margin:0;background:#f4f7fb;color:#172033;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{max-width:1450px;margin:auto;padding:30px 24px}h1{margin:0;font-size:30px}h2{font-size:21px}.muted{color:#64748b}nav{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:20px 0}nav a,.button{padding:9px 16px;border:1px solid #d7e0ec;border-radius:9px;background:white;text-decoration:none;color:#2457c5}nav a.active{background:#2457c5;color:white}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px;margin:20px 0}.card,.conversation{background:white;border:1px solid #e2e8f0;border-radius:12px;padding:18px}.value{font-size:26px;font-weight:700}.badge{display:inline-block;border-radius:20px;padding:3px 10px;font-size:12px;font-weight:700}.pass{color:#147d45;background:#e8f7ee}.fail{color:#b42318;background:#fff0ee}.guard{color:#855100;background:#fff4d7}.table-wrap{overflow:auto;background:white;border:1px solid #e2e8f0;border-radius:12px}table{width:100%;border-collapse:collapse;min-width:900px}th,td{text-align:left;vertical-align:top;padding:12px;border-bottom:1px solid #e2e8f0}th{background:#f8fafc}a{color:#2457c5}.conversation{margin:18px 0}summary{cursor:pointer;font-weight:700;font-size:18px}.turn{margin-top:16px;padding-top:16px;border-top:1px solid #e2e8f0}.bubble{padding:12px 16px;border-radius:10px;background:#f1f5f9;margin:8px 0;white-space:pre-wrap;overflow-wrap:anywhere}.reply{background:#eef5ff}.turn-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.detail{padding:10px;background:#f8fafc;border-radius:8px;overflow-wrap:anywhere}pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0}label,select{font:inherit}select{padding:7px;border:1px solid #cbd5e1;border-radius:6px}.note{font-size:13px;color:#64748b}@media(max-width:600px){main{padding:20px 12px}h1{font-size:25px}}
 '''
 
 
@@ -43,19 +43,39 @@ def card(label,value):
     return f'<div class="card"><div class="muted">{safe(label)}</div><div class="value">{safe(value)}</div></div>'
 
 
+def render_nav(active='single'):
+    """Use labels that explain the difference between case and session reports."""
+    links=[
+        ('single','/','One-message tests'),
+        ('sessions','/sessions','Multi-turn conversations'),
+        ('aws','/aws-runs','AWS run summaries'),
+        ('upload','/benchmarks','Upload and run'),
+        ('history','/benchmark-history','Run history'),
+    ]
+    rendered=''.join(
+        f'<a href="{href}"'+(' class="active"' if key==active else '')+f'>{label}</a>'
+        for key,href,label in links
+        if not (os.getenv('AGENTEVAL_SPACE_DEMO')=='1' and key=='aws')
+    )
+    if os.getenv('AGENTEVAL_SPACE_DEMO')=='1':
+        rendered+='<button class="button" onclick="clearDemoData()">Clear my data</button>'
+    return '<nav>'+rendered+'</nav>'
+
+
 def render_report(report, sessions=False, filter_mode='all'):
-    nav='<nav><a href="/" class="'+('' if sessions else 'active')+'">Single requests</a><a href="/sessions" class="'+('active' if sessions else '')+'">Conversations</a><a href="/aws-runs">AWS runs</a><a href="/benchmarks">Upload benchmarks</a><a href="/benchmark-history">Run history</a></nav>'
-    if os.getenv('AGENTEVAL_SPACE_DEMO') == '1':
-        nav=nav.replace('<a href="/aws-runs">AWS runs</a>','')
-        nav=nav.replace('</nav>','<button class="button" onclick="clearDemoData()">Clear my data</button></nav>')
-    title='Conversation evaluation' if sessions else 'Single-request evaluation'
-    body='<h1>AgentEval Workbench</h1>'+nav+f'<h2>{title}</h2>'
+    nav=render_nav('sessions' if sessions else 'single')
+    title='Multi-turn conversation results' if sessions else 'One-message test results'
+    intro=('A conversation is one customer session made up of multiple turns. The cards summarize sessions and turns; expand a session to inspect each exchange and its checks.'
+           if sessions else 'Each case tests one customer message. Compare the expected route with the actual route, then review the answer, latency, and checks.')
+    body='<h1>AgentEval Workbench</h1>'+nav+f'<h2>{title}</h2><p class="muted">{intro}</p>'
     if report is None:
         if os.getenv('AGENTEVAL_SPACE_DEMO') == '1':
-            body+='<div class="card">No report in this browser session yet. Upload the sample benchmark and run an evaluation to create one.</div>'
+            body+='<div class="card">No report in this browser session yet. Open <a href="/benchmarks">Upload and run</a>, load the synthetic sample, review it, and start an evaluation.</div>'
         else:
+            command=('AGENTEVAL_PROVIDER=demo python3 -m app.session_eval --benchmark benchmarks/support_sessions.jsonl --output reports/session-latest.json'
+                     if sessions else 'AGENTEVAL_PROVIDER=demo python3 -m app.evaluate --benchmark benchmarks/support.jsonl --output reports/latest.json')
             filename='reports/session-latest.json' if sessions else 'reports/latest.json'
-            body+=f'<div class="card">No report available. Save a report to <strong>{filename}</strong>, then refresh.</div>'
+            body+=f'<div class="card"><strong>No report loaded.</strong><p>Run this command from the project folder in Terminal, then refresh this page:</p><pre>{safe(command)}</pre><p>The report should be saved at <code>{safe(filename)}</code>. To upload your own conversation benchmark, use <a href="/benchmarks">Upload and run</a>; that workflow needs the staging chatbot running.</p></div>'
     else:
         metrics=report.get('metrics',{});cases=report.get('cases',[])
         body+=f'<p>Provider: <strong>{safe(report.get("provider","unknown"))}</strong> &nbsp; Overall gate: {badge(bool(report.get("passed")))}</p>'
@@ -99,7 +119,7 @@ def render_report(report, sessions=False, filter_mode='all'):
             body+='</tbody></table></div>'
         download='/session-report.json' if sessions else '/report.json'
         body+=f'<p><a href="{download}">Download raw report (JSON)</a></p>'
-    note='Uploads and reports are scoped to this browser cookie. The app removes its visible files after 30 minutes of inactivity; this does not authenticate you or guarantee secure erasure from hosting infrastructure.' if os.getenv('AGENTEVAL_SPACE_DEMO') == '1' else 'Local report viewer. Refresh after replacing a report. Opening this page does not run tests or call a model API.'
+    note='Uploads and reports are scoped to this browser cookie. The app removes its visible files after 30 minutes of inactivity; this does not authenticate you or guarantee secure erasure from hosting infrastructure.' if os.getenv('AGENTEVAL_SPACE_DEMO') == '1' else 'This local page displays saved reports. Opening or refreshing it does not run tests or call a model API; use Terminal or Upload and run to start an evaluation.'
     body+='<p class="note">'+safe(note)+'</p>'
     if os.getenv('AGENTEVAL_SPACE_DEMO') == '1':
         body+='<script>async function clearDemoData(){if(!confirm("Remove your upload and report files from this app now? This cannot erase provider backups or infrastructure copies."))return;const r=await fetch("/privacy/clear",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});if(r.ok)location.href="/benchmarks";else alert((await r.json()).error||"Could not clear app files")}</script>'
@@ -107,7 +127,7 @@ def render_report(report, sessions=False, filter_mode='all'):
 
 
 def render_aws_runs(report):
-    nav='<nav><a href="/">Single requests</a><a href="/sessions">Conversations</a><a href="/aws-runs" class="active">AWS runs</a><a href="/benchmarks">Upload benchmarks</a><a href="/benchmark-history">Run history</a></nav>'
+    nav=render_nav('aws')
     body='<h1>AgentEval Workbench</h1>'+nav+'<h2>AWS synthetic runs</h2>'
     body+='<p class="note">This page reads summary-only results synced from your AWS CloudWatch log group into a local file. It does not call AWS or run evaluations when opened. Guard interventions are protective checks and do not automatically mean a test failed.</p>'
     if report is None:
